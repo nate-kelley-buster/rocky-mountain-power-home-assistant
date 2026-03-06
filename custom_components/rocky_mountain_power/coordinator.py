@@ -20,7 +20,6 @@ from .const import DOMAIN
 from .rocky_mountain_power import (
     AggregateType,
     CostRead,
-    Forecast,
     InvalidAuth,
     RockyMountainPower,
 )
@@ -28,7 +27,7 @@ from .rocky_mountain_power import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, Forecast]]):
+class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
     """Handle fetching Rocky Mountain Power data, updating sensors and inserting statistics."""
 
     def __init__(
@@ -55,12 +54,21 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, Forecast]]):
             pass
 
         # Force the coordinator to periodically update by registering at least one listener.
+        # Needed when the _async_update_data below returns {} for utilities that don't provide
+        # forecast, which results to no sensors added, no registered listeners, and thus
+        # _async_update_data not periodically getting called which is needed for _insert_statistics.
         self.async_add_listener(_dummy_listener)
 
     async def _async_update_data(
         self,
-    ) -> dict[str, Forecast]:
-        """Fetch data from API endpoint."""
+    ) -> dict[str, dict]:
+        """Fetch data from API endpoint.
+
+        Returns a dict keyed by account_number, each containing:
+            - "nickname": account display name
+            - "forecast": forecast fields dict or empty dict
+            - "billing": billing fields dict or empty dict
+        """
         try:
             # Login expires after a few minutes.
             # Given the infrequent updating (every 12h)
@@ -68,13 +76,71 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, Forecast]]):
             await self.hass.async_add_executor_job(self.api.login)
         except InvalidAuth as err:
             raise ConfigEntryAuthFailed from err
-        else:
-            forecasts: list[Forecast] = await self.hass.async_add_executor_job(self.api.get_forecast)
-            _LOGGER.debug("Updating sensor data with: %s", forecasts)
-            await self._insert_statistics()
+
+        result: dict[str, dict] = {}
+
+        try:
+            # Discover all accounts associated with this login
+            accounts = await self.hass.async_add_executor_job(self.api.get_accounts)
+            active_accounts = [a for a in accounts if a.status == "Active"]
+            _LOGGER.debug("Discovered %d accounts (%d active)", len(accounts), len(active_accounts))
+
+            for acct in active_accounts:
+                acct_num = acct.account_number
+                nickname = acct.nickname or acct.address or acct_num
+                _LOGGER.debug("Fetching data for account %s (%s)", acct_num, nickname)
+
+                # Switch to this account on the RMP site
+                await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+
+                # Update internal account reference after switch
+                self.api.account = next(
+                    (a for a in self.api.utility.accounts if a["accountNumber"] == acct_num),
+                    self.api.account,
+                )
+
+                result[acct_num] = {
+                    "nickname": nickname,
+                    "forecast": {},
+                    "billing": {},
+                }
+
+                # Fetch forecast for this account
+                forecasts = await self.hass.async_add_executor_job(self.api.get_forecast)
+                for forecast in forecasts:
+                    result[acct_num]["forecast"] = {
+                        "forecasted_cost": forecast.forecasted_cost,
+                        "forecasted_cost_low": forecast.forecasted_cost_low,
+                        "forecasted_cost_high": forecast.forecasted_cost_high,
+                    }
+
+                # Fetch billing info for this account
+                billing = await self.hass.async_add_executor_job(self.api.get_billing_info)
+                if billing:
+                    result[acct_num]["billing"] = {
+                        "current_balance": billing.current_balance,
+                        "due_date": billing.due_date,
+                        "past_due_amount": billing.past_due_amount,
+                        "last_payment_amount": billing.last_payment_amount,
+                        "last_payment_date": billing.last_payment_date,
+                        "next_statement_date": billing.next_statement_date,
+                    }
+
+            _LOGGER.debug("Updating sensor data: %s", result)
+
+            # Insert energy statistics for each account
+            for acct in active_accounts:
+                nickname = acct.nickname or acct.address or acct.account_number
+                await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+                self.api.account = next(
+                    (a for a in self.api.utility.accounts if a["accountNumber"] == acct.account_number),
+                    self.api.account,
+                )
+                await self._insert_statistics()
         finally:
             await self.hass.async_add_executor_job(self.api.end_session)
-        return {forecast.account.utility_account_id: forecast for forecast in forecasts}
+
+        return result
 
     async def _insert_statistics(self) -> None:
         """Insert Rocky Mountain Power statistics."""
@@ -172,7 +238,12 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, Forecast]]):
         )
 
     async def _async_get_all_cost_reads(self) -> list[CostRead]:
-        """Get all cost reads at different resolutions depending on age."""
+        """Get all cost reads since account activation but at different resolutions depending on age.
+
+        - month resolution for all years (since account activation)
+        - day resolution for past 2 years
+        - hour resolution for past month
+        """
         cost_reads = []
         cost_reads.extend(await self.hass.async_add_executor_job(self.api.get_cost_reads, AggregateType.MONTH))
         cost_reads.extend(await self.hass.async_add_executor_job(self.api.get_cost_reads, AggregateType.DAY, 24))

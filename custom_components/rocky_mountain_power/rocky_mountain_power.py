@@ -51,6 +51,18 @@ class Account:
 
 
 @dataclasses.dataclass
+class AccountInfo:
+    """Extended account info from getAccountList."""
+
+    account_number: str
+    address: str
+    nickname: str
+    status: str
+    is_business: bool
+    customer_idn: int
+
+
+@dataclasses.dataclass
 class Forecast:
     """Forecast data for an account."""
 
@@ -61,6 +73,20 @@ class Forecast:
     forecasted_cost: float
     forecasted_cost_low: float
     forecasted_cost_high: float
+
+
+@dataclasses.dataclass
+class BillingInfo:
+    """Billing and payment info for an account."""
+
+    account: Account
+    current_balance: float
+    due_date: Optional[date]
+    past_due_amount: float
+    last_payment_amount: float
+    last_payment_date: Optional[date]
+    next_statement_date: Optional[date]
+    enrolled_payment_program: Optional[str]
 
 
 @dataclasses.dataclass
@@ -89,6 +115,7 @@ class RockyMountainPowerUtility:
     def __init__(self):
         self.user_id = None
         self.account = {}
+        self.accounts: list[dict] = []
         self.forecast = {}
         self.xhrs: dict[str, str] = {}
         self._playwright = None
@@ -159,9 +186,46 @@ class RockyMountainPowerUtility:
 
         me = json.loads(self.xhrs["https://csapps.rockymountainpower.net/api/user/me"])
         self.user_id = me["id"]
-        accounts = json.loads(self.xhrs["https://csapps.rockymountainpower.net/api/self-service/getAccountList"])
-        self.account = accounts["getAccountListResponseBody"]["accountList"]["webAccount"][0]
+        accounts_data = json.loads(self.xhrs["https://csapps.rockymountainpower.net/api/self-service/getAccountList"])
+        self.accounts = accounts_data["getAccountListResponseBody"]["accountList"]["webAccount"]
+        self.account = self.accounts[0]
         return self.xhrs
+
+    def switch_account(self, nickname: str) -> bool:
+        """Switch to a different account using the account picker dropdown.
+
+        Args:
+            nickname: The account nickname to switch to (from getAccountList).
+
+        Returns:
+            True if successfully switched, False if account not found.
+        """
+        page = self._page
+        picker = page.query_selector("wcss-account-picker mat-select")
+        if not picker:
+            _LOGGER.warning("Account picker not found on page")
+            return False
+
+        # Open the dropdown
+        picker.click()
+        page.wait_for_timeout(1000)
+
+        # Find and click the matching option
+        options = page.query_selector_all("mat-option")
+        for opt in options:
+            text = opt.evaluate("el => el.textContent.trim()")
+            if nickname in text:
+                opt.click()
+                page.wait_for_timeout(3000)
+                # Clear cached XHRs so we get fresh data for the new account
+                self.xhrs.clear()
+                # Wait for the account data to load
+                page.wait_for_timeout(2000)
+                return True
+
+        # Close dropdown if we didn't find a match
+        page.keyboard.press("Escape")
+        return False
 
     def goto_energy_usage(self):
         page = self._page
@@ -171,6 +235,33 @@ class RockyMountainPowerUtility:
             page.wait_for_timeout(3000)
         except Exception:
             raise CannotConnect
+
+    def goto_billing(self):
+        """Navigate to the billing & payment history page."""
+        page = self._page
+        page.goto("https://csapps.rockymountainpower.net/secure/my-account/billing-payment-history")
+        try:
+            page.wait_for_function(
+                "document.title === 'Billing & payment history'",
+                timeout=30000,
+            )
+            page.wait_for_timeout(3000)
+        except Exception:
+            raise CannotConnect
+
+    def get_billing_info(self) -> dict:
+        """Get billing info from the account info XHR (captured during login/navigation)."""
+        xhr_url = "https://csapps.rockymountainpower.net/api/account/getAccountInfo"
+
+        # The billing page triggers getAccountInfo if we haven't captured it yet
+        if xhr_url not in self.xhrs:
+            self.goto_billing()
+            self._wait_for_xhr(xhr_url, timeout=10000)
+
+        if xhr_url in self.xhrs:
+            details = json.loads(self.xhrs[xhr_url])
+            return details.get("getAccountInfoResponseBody", {}).get("accountInfo", {})
+        return None
 
     def get_forecast(self):
         self.goto_energy_usage()
@@ -274,6 +365,23 @@ class RockyMountainPowerUtility:
                     break
         return usage
 
+    def download_daily_usage(self):
+        """Download Green Button data from the energy usage page."""
+        self.goto_energy_usage()
+        page = self._page
+        dropdowns = page.query_selector_all("div.mat-form-field-infix")
+        dropdowns[3].click()
+        page.wait_for_timeout(500)
+        options = page.query_selector_all(".mat-option")
+        options[-1].click()
+
+        with page.expect_download() as download_info:
+            page.click("text=DOWNLOAD GREEN BUTTON DATA")
+        download = download_info.value
+        path = download.path()
+        with open(path, "r") as file:
+            return file.read()
+
     def get_usage_by_hour(self, days=1):
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
         self.goto_energy_usage()
@@ -343,8 +451,22 @@ class RockyMountainPower:
     def end_session(self) -> None:
         self.utility.on_quit()
 
+    def get_accounts(self) -> list[AccountInfo]:
+        """Get all accounts for the signed in user."""
+        return [
+            AccountInfo(
+                account_number=acct["accountNumber"],
+                address=acct.get("mailingAddressLine1", "").strip(),
+                nickname=acct.get("accountNickname", "").strip(),
+                status=acct.get("status", "Unknown"),
+                is_business=acct.get("isBusiness", False),
+                customer_idn=acct.get("customer", {}).get("idn", 0),
+            )
+            for acct in self.utility.accounts
+        ]
+
     def get_account(self) -> Account:
-        """Get the account for the signed in user."""
+        """Get the active account for the signed in user."""
         account = self._get_account()
         return Account(
             customer=Customer(uuid=self.customer_id),
@@ -374,6 +496,52 @@ class RockyMountainPower:
                 )
             )
         return forecasts
+
+    def get_billing_info(self) -> Optional[BillingInfo]:
+        """Get billing and payment info for the active account."""
+        info = self.utility.get_billing_info()
+        if info is None:
+            return None
+
+        due_date = None
+        if info.get("currentDueAmountDueDate"):
+            try:
+                due_date = date.fromisoformat(info["currentDueAmountDueDate"])
+            except (ValueError, TypeError):
+                pass
+
+        last_payment_date = None
+        if info.get("lastPaymentDate"):
+            try:
+                last_payment_date = date.fromisoformat(info["lastPaymentDate"])
+            except (ValueError, TypeError):
+                pass
+
+        next_statement_date = None
+        if info.get("nextStatementDate"):
+            try:
+                next_statement_date = date.fromisoformat(info["nextStatementDate"])
+            except (ValueError, TypeError):
+                pass
+
+        return BillingInfo(
+            account=Account(
+                customer=Customer(uuid=self.customer_id),
+                uuid=self.account["accountNumber"],
+                utility_account_id=self.customer_id,
+            ),
+            current_balance=float(info.get("totalDueAmount", 0)),
+            due_date=due_date,
+            past_due_amount=float(info.get("pastDueAmount", 0)),
+            last_payment_amount=float(info.get("lastPaymentAmount", 0)),
+            last_payment_date=last_payment_date,
+            next_statement_date=next_statement_date,
+            enrolled_payment_program=info.get("enrolledPaymentProgram"),
+        )
+
+    def switch_account(self, nickname: str) -> bool:
+        """Switch the active account on the RMP site."""
+        return self.utility.switch_account(nickname)
 
     def _get_account(self) -> Any:
         """Get account associated with the user."""
@@ -428,14 +596,17 @@ if __name__ == '__main__':
         forecasts = api.get_forecast()
         print("Got forecasts")
         print(forecasts)
-        print("Fetching cost reads")
+
+        print("\nAccounts:")
+        for acct in api.get_accounts():
+            print(f"  {acct.account_number} - {acct.nickname} ({acct.address})")
+
+        print("\nBilling info:")
+        billing = api.get_billing_info()
+        print(billing)
+
+        print("\nFetching cost reads")
         cost_reads = api.get_cost_reads(AggregateType.MONTH)
-        print(cost_reads)
-
-        cost_reads = api.get_cost_reads(AggregateType.DAY, 24)
-        print(cost_reads)
-
-        cost_reads = api.get_cost_reads(AggregateType.HOUR, 60)
         print(cost_reads)
     except InvalidAuth:
         errors["base"] = "invalid_auth"
