@@ -7,10 +7,9 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant import config_entries
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 
 from .const import DOMAIN
 from .rocky_mountain_power import (
@@ -47,72 +46,70 @@ def _validate_login(login_data: dict[str, str]) -> dict[str, str]:
     return errors
 
 
-class RockyMountainPowerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for RockyMountainPower."""
 
     VERSION = 1
 
-    def __init__(self) -> None:
-        """Initialize a new RockyMountainPowerConfigFlow."""
-        self.reauth_entry: config_entries.ConfigEntry | None = None
-
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._async_abort_entries_match(
-                {
-                    CONF_USERNAME: user_input[CONF_USERNAME],
-                }
-            )
+            await self.async_set_unique_id(user_input[CONF_USERNAME])
+            self._abort_if_unique_id_configured()
 
             errors = await self.hass.async_add_executor_job(_validate_login, user_input)
             if not errors:
-                return self._async_create_rocky_mountain_power_entry(user_input)
+                return self._async_create_entry(user_input)
 
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )
 
     @callback
-    def _async_create_rocky_mountain_power_entry(self, data: dict[str, Any]) -> FlowResult:
+    def _async_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
         """Create the config entry."""
         return self.async_create_entry(
             title=f"Rocky Mountain Power ({data[CONF_USERNAME]})",
             data=data,
         )
 
-    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
         """Handle configuration by re-auth."""
-        self.reauth_entry = self.hass.config_entries.async_get_entry(
-            self.context["entry_id"]
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME): self._get_reauth_entry().data[CONF_USERNAME],
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
         )
-        return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Dialog that informs the user that reauth is required."""
-        if not self.reauth_entry:
-            return self.async_abort(reason="unknown")
         errors: dict[str, str] = {}
+        reauth_entry = self._get_reauth_entry()
+
         if user_input is not None:
-            data = {**self.reauth_entry.data, **user_input}
+            data = {**reauth_entry.data, **user_input}
             errors = await self.hass.async_add_executor_job(_validate_login, data)
             if not errors:
-                self.hass.config_entries.async_update_entry(
-                    self.reauth_entry, data=data
-                )
-                await self.hass.config_entries.async_reload(self.reauth_entry.entry_id)
-                return self.async_abort(reason="reauth_successful")
-        schema = {
-            vol.Required(CONF_USERNAME): self.reauth_entry.data[CONF_USERNAME],
-            vol.Required(CONF_PASSWORD): str,
-        }
+                return self.async_update_reload_and_abort(reauth_entry, data=data)
+
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(schema),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME): reauth_entry.data[CONF_USERNAME],
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
             errors=errors,
         )

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -11,35 +10,29 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import RockyMountainPowerCoordinator
+from .coordinator import RMPConfigEntry, RockyMountainPowerCoordinator
+
+PARALLEL_UPDATES = 0
 
 
-@dataclass
-class RockyMountainPowerEntityDescriptionMixin:
-    """Mixin values for required keys."""
+@dataclass(frozen=True, kw_only=True)
+class RockyMountainPowerEntityDescription(SensorEntityDescription):
+    """Class describing Rocky Mountain Power sensor entities."""
 
     value_fn: Callable[[dict], StateType]
 
 
-@dataclass
-class RockyMountainPowerEntityDescription(SensorEntityDescription, RockyMountainPowerEntityDescriptionMixin):
-    """Class describing Rocky Mountain Power sensors entities."""
-
-
-# suggested_display_precision=0 for forecast sensors since
-# Rocky Mountain Power provides 0 decimal points for these.
 FORECAST_SENSORS: tuple[RockyMountainPowerEntityDescription, ...] = (
     RockyMountainPowerEntityDescription(
         key="elec_forecasted_cost",
-        name="Current bill forecasted cost",
+        translation_key="forecasted_cost",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="USD",
         state_class=SensorStateClass.TOTAL,
@@ -48,7 +41,7 @@ FORECAST_SENSORS: tuple[RockyMountainPowerEntityDescription, ...] = (
     ),
     RockyMountainPowerEntityDescription(
         key="elec_forecasted_cost_low",
-        name="Current bill forecasted cost low",
+        translation_key="forecasted_cost_low",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="USD",
         state_class=SensorStateClass.TOTAL,
@@ -57,7 +50,7 @@ FORECAST_SENSORS: tuple[RockyMountainPowerEntityDescription, ...] = (
     ),
     RockyMountainPowerEntityDescription(
         key="elec_forecasted_cost_high",
-        name="Current bill forecasted cost high",
+        translation_key="forecasted_cost_high",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="USD",
         state_class=SensorStateClass.TOTAL,
@@ -69,31 +62,29 @@ FORECAST_SENSORS: tuple[RockyMountainPowerEntityDescription, ...] = (
 BILLING_SENSORS: tuple[RockyMountainPowerEntityDescription, ...] = (
     RockyMountainPowerEntityDescription(
         key="current_balance",
-        name="Current balance due",
+        translation_key="current_balance",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="USD",
-        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("billing", {}).get("current_balance"),
     ),
     RockyMountainPowerEntityDescription(
         key="due_date",
-        name="Payment due date",
+        translation_key="due_date",
         device_class=SensorDeviceClass.DATE,
         value_fn=lambda data: data.get("billing", {}).get("due_date"),
     ),
     RockyMountainPowerEntityDescription(
         key="past_due_amount",
-        name="Past due amount",
+        translation_key="past_due_amount",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="USD",
-        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("billing", {}).get("past_due_amount"),
     ),
     RockyMountainPowerEntityDescription(
         key="last_payment_amount",
-        name="Last payment amount",
+        translation_key="last_payment_amount",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="USD",
         suggested_display_precision=2,
@@ -101,13 +92,13 @@ BILLING_SENSORS: tuple[RockyMountainPowerEntityDescription, ...] = (
     ),
     RockyMountainPowerEntityDescription(
         key="last_payment_date",
-        name="Last payment date",
+        translation_key="last_payment_date",
         device_class=SensorDeviceClass.DATE,
         value_fn=lambda data: data.get("billing", {}).get("last_payment_date"),
     ),
     RockyMountainPowerEntityDescription(
         key="next_statement_date",
-        name="Next statement date",
+        translation_key="next_statement_date",
         device_class=SensorDeviceClass.DATE,
         value_fn=lambda data: data.get("billing", {}).get("next_statement_date"),
     ),
@@ -117,11 +108,12 @@ ALL_SENSORS = FORECAST_SENSORS + BILLING_SENSORS
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RMPConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the Rocky Mountain Power sensor."""
-
-    coordinator: RockyMountainPowerCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     entities: list[RockyMountainPowerSensor] = []
 
     for account_number, account_data in coordinator.data.items():
@@ -134,16 +126,16 @@ async def async_setup_entry(
             model="Electric Account",
             entry_type=DeviceEntryType.SERVICE,
         )
-        for sensor in ALL_SENSORS:
-            entities.append(
-                RockyMountainPowerSensor(
-                    coordinator,
-                    sensor,
-                    account_number,
-                    device,
-                    device_id,
-                )
+        entities.extend(
+            RockyMountainPowerSensor(
+                coordinator,
+                sensor,
+                account_number,
+                device,
+                device_id,
             )
+            for sensor in ALL_SENSORS
+        )
 
     async_add_entities(entities)
 
@@ -151,6 +143,7 @@ async def async_setup_entry(
 class RockyMountainPowerSensor(CoordinatorEntity[RockyMountainPowerCoordinator], SensorEntity):
     """Representation of a Rocky Mountain Power sensor."""
 
+    _attr_has_entity_name = True
     entity_description: RockyMountainPowerEntityDescription
 
     def __init__(

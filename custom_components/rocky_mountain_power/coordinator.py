@@ -2,20 +2,25 @@
 from datetime import timedelta
 import json
 import logging
-from types import MappingProxyType
 from typing import Any, cast
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMeanType,
+    StatisticMetaData,
+)
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
     statistics_during_period,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, UnitOfEnergy
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from .const import DOMAIN
 from .rocky_mountain_power import (
@@ -28,33 +33,40 @@ from .rocky_mountain_power import (
 
 _LOGGER = logging.getLogger(__name__)
 
+type RMPConfigEntry = ConfigEntry[RockyMountainPowerCoordinator]
+
 
 class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
     """Handle fetching Rocky Mountain Power data, updating sensors and inserting statistics."""
 
+    config_entry: RMPConfigEntry
+
     def __init__(
         self,
         hass: HomeAssistant,
-        entry_data: MappingProxyType[str, Any],
+        config_entry: RMPConfigEntry,
     ) -> None:
         """Initialize the data handler."""
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name="Rocky Mountain Power",
-            # Data is updated daily on Rocky Mountain Power.
-            # Refresh every 12h to be at most 12h behind.
             update_interval=timedelta(hours=12),
         )
         self.api = RockyMountainPower(
-            entry_data[CONF_USERNAME],
-            entry_data[CONF_PASSWORD],
+            config_entry.data[CONF_USERNAME],
+            config_entry.data[CONF_PASSWORD],
         )
 
-        # Register a listener to ensure periodic updates even when no sensors
-        # are registered (e.g., accounts with no forecast data). Required
-        # because _async_update_data must run periodically for _insert_statistics.
-        self.async_add_listener(lambda: None)
+        # Force periodic updates even when no sensors are registered (e.g.,
+        # accounts with no forecast data). Statistics insertion needs the
+        # coordinator to keep polling regardless of listener count.
+        @callback
+        def _dummy_listener() -> None:
+            pass
+
+        self.async_add_listener(_dummy_listener)
 
     async def _async_update_data(
         self,
@@ -67,17 +79,15 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             - "billing": billing fields dict or empty dict
         """
         try:
-            # Login expires after a few minutes.
-            # Given the infrequent updating (every 12h)
-            # assume previous session has expired and re-login.
             await self.hass.async_add_executor_job(self.api.login)
         except InvalidAuth as err:
             raise ConfigEntryAuthFailed from err
+        except CannotConnect as err:
+            raise UpdateFailed(f"Error during login: {err}") from err
 
         result: dict[str, dict] = {}
 
         try:
-            # Discover all accounts associated with this login
             accounts = await self.hass.async_add_executor_job(self.api.get_accounts)
             active_accounts = [a for a in accounts if a.status == "Active"]
             _LOGGER.debug("Discovered %d accounts (%d active)", len(accounts), len(active_accounts))
@@ -87,13 +97,11 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 nickname = acct.nickname or acct.address or acct_num
                 _LOGGER.debug("Fetching data for account %s (%s)", acct_num, nickname)
 
-                # Switch to this account on the RMP site
                 switched = await self.hass.async_add_executor_job(self.api.switch_account, nickname)
                 if not switched:
                     _LOGGER.warning("Failed to switch to account %s (%s), skipping", acct_num, nickname)
                     continue
 
-                # Update internal account reference after switch
                 self.api.account = next(
                     (a for a in self.api.utility.accounts if a["accountNumber"] == acct_num),
                     self.api.account,
@@ -105,7 +113,6 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                     "billing": {},
                 }
 
-                # Fetch forecast for this account
                 try:
                     forecasts = await self.hass.async_add_executor_job(self.api.get_forecast)
                     for forecast in forecasts:
@@ -117,7 +124,6 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 except (CannotConnect, json.JSONDecodeError, KeyError, ValueError) as err:
                     _LOGGER.warning("Failed to fetch forecast for %s: %s", acct_num, err)
 
-                # Fetch billing info for this account
                 try:
                     billing = await self.hass.async_add_executor_job(self.api.get_billing_info)
                     if billing:
@@ -132,38 +138,31 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 except (CannotConnect, json.JSONDecodeError, KeyError, ValueError) as err:
                     _LOGGER.warning("Failed to fetch billing for %s: %s", acct_num, err)
 
-            _LOGGER.debug("Updating sensor data: %s", result)
-
-            # Insert energy statistics for each account
-            for acct in active_accounts:
-                nickname = acct.nickname or acct.address or acct.account_number
-                switched = await self.hass.async_add_executor_job(self.api.switch_account, nickname)
-                if not switched:
-                    continue
-                self.api.account = next(
-                    (a for a in self.api.utility.accounts if a["accountNumber"] == acct.account_number),
-                    self.api.account,
-                )
                 try:
                     await self._insert_statistics()
                 except (CannotConnect, json.JSONDecodeError, KeyError, ValueError) as err:
-                    _LOGGER.warning("Failed to insert statistics for %s: %s", acct.account_number, err)
+                    _LOGGER.warning("Failed to insert statistics for %s: %s", acct_num, err)
+
+            _LOGGER.debug("Updating sensor data: %s", result)
+
         finally:
             await self.hass.async_add_executor_job(self.api.end_session)
+
+        if not result:
+            raise UpdateFailed("No data received from any account")
 
         return result
 
     async def _insert_statistics(self) -> None:
         """Insert Rocky Mountain Power statistics."""
         account = await self.hass.async_add_executor_job(self.api.get_account)
-        id_prefix = "_".join(
-            (
-                "elec",
-                account.utility_account_id,
-            )
+        id_prefix = (
+            f"elec_{account.uuid}"
+            .replace("-", "_")
+            .replace(" ", "_")
         )
-        cost_statistic_id = f"{DOMAIN}:{id_prefix}_energy_cost".replace("-", "_")
-        consumption_statistic_id = f"{DOMAIN}:{id_prefix}_energy_consumption".replace("-", "_")
+        cost_statistic_id = f"{DOMAIN}:{id_prefix}_energy_cost"
+        consumption_statistic_id = f"{DOMAIN}:{id_prefix}_energy_consumption"
         _LOGGER.debug(
             "Updating Statistics for %s and %s",
             cost_statistic_id,
@@ -230,27 +229,23 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 )
             )
 
-        name_prefix = " ".join(
-            (
-                "Rocky Mountain Power",
-                "elec",
-                account.utility_account_id,
-            )
-        )
+        name_prefix = f"Rocky Mountain Power elec {account.uuid}"
         cost_metadata = StatisticMetaData(
-            has_mean=False,
+            mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=f"{name_prefix} cost",
             source=DOMAIN,
             statistic_id=cost_statistic_id,
+            unit_class=None,
             unit_of_measurement=None,
         )
         consumption_metadata = StatisticMetaData(
-            has_mean=False,
+            mean_type=StatisticMeanType.NONE,
             has_sum=True,
             name=f"{name_prefix} consumption",
             source=DOMAIN,
             statistic_id=consumption_statistic_id,
+            unit_class=EnergyConverter.UNIT_CLASS,
             unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         )
 
@@ -290,7 +285,6 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             if existing is None:
                 by_start[ts] = read
             else:
-                # Keep the read with the shorter time span (finer granularity)
                 existing_duration = (existing.end_time - existing.start_time).total_seconds()
                 new_duration = (read.end_time - read.start_time).total_seconds()
                 if new_duration < existing_duration:

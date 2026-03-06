@@ -22,6 +22,18 @@ _spec.loader.exec_module(rmp)
 sys.modules["rmp"] = rmp
 
 
+@pytest.fixture(autouse=True)
+def mock_recorder_before_hass(recorder_db_url: str) -> None:
+    """Prepare the recorder database before the hass fixture starts.
+
+    Our integration declares ``"dependencies": ["recorder"]``, so the
+    recorder component must already be ready when HA processes deps.
+    This fixture is a dependency of the ``hass`` fixture provided by
+    ``pytest-homeassistant-custom-component`` and ensures the recorder
+    database URL is resolved before ``hass`` marks itself as set up.
+    """
+
+
 @pytest.fixture
 def rmp_credentials():
     """Return RMP credentials from environment, or skip if not set."""

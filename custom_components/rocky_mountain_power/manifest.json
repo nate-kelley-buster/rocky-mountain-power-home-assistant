@@ -1,6 +1,7 @@
 {
   "domain": "rocky_mountain_power",
   "name": "Rocky Mountain Power",
+  "integration_type": "hub",
   "version": "0.1.0",
   "codeowners": ["@nate-kelley-buster"],
   "config_flow": true,

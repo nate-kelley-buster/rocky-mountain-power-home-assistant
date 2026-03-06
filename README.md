@@ -3,6 +3,7 @@
 [![GitHub Release][releases-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]](LICENSE)
+[![Tests][tests-shield]][tests]
 
 [![hacs][hacsbadge]][hacs]
 ![Project Maintenance][maintenance-shield]
@@ -20,9 +21,31 @@ This project is based on the excellent work by [Jared Hobbs (@jaredhobbs)](https
 ## Features
 
 - Forecasted electricity cost (standard, low, high)
+- Billing info: current balance, due date, past due amount, last payment
 - Historical energy consumption and cost statistics
 - Integrates with the Home Assistant Energy Dashboard
+- Multi-account support
 - No separate Selenium addon required — uses Playwright directly
+
+## Prerequisites
+
+> **Important:** This integration uses Playwright for browser automation, which
+> requires Chromium to be installed on the system running Home Assistant.
+
+Playwright works on standard Linux (e.g. Debian/Ubuntu-based Docker images) and
+macOS. It may **not** work on minimal environments like Home Assistant OS (HAOS)
+without additional setup.
+
+After installing the integration, ensure Playwright's Chromium browser is
+available:
+
+```bash
+pip install playwright
+python -m playwright install --with-deps chromium
+```
+
+If you run Home Assistant in Docker, you'll need a container image that includes
+the system libraries Chromium requires (glibc, NSS, ALSA, etc.).
 
 ## Installation
 
@@ -50,7 +73,7 @@ Or, to add manually via HACS:
 6. Restart Home Assistant.
 7. In the HA UI go to "Configuration" -> "Integrations", click "+" and search for "Rocky Mountain Power".
 
-## Configuration is done in the UI
+## Configuration
 
 [![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rocky_mountain_power)
 
@@ -59,6 +82,31 @@ Rocky Mountain Power account. You can turn it off from the "Manage account" link
 
 1. **Username**: your Rocky Mountain Power username
 2. **Password**: your Rocky Mountain Power password
+
+## Sensors
+
+| Sensor | Description |
+|--------|-------------|
+| Current bill forecasted cost | Projected cost for the current billing period |
+| Current bill forecasted cost (low) | Low estimate of projected cost |
+| Current bill forecasted cost (high) | High estimate of projected cost |
+| Current balance due | Amount currently owed |
+| Payment due date | When payment is due |
+| Past due amount | Any overdue balance |
+| Last payment amount | Most recent payment |
+| Last payment date | When last payment was made |
+| Next statement date | When the next bill will be generated |
+
+## Energy Dashboard
+
+This integration automatically imports historical energy consumption and cost
+data into Home Assistant's long-term statistics. To add it to the Energy
+Dashboard:
+
+1. Go to **Settings → Dashboards → Energy**
+2. Under **Electricity grid**, click **Add consumption**
+3. Select the `Rocky Mountain Power elec <account> energy consumption` statistic
+4. Optionally add the matching cost statistic
 
 ## Acknowledgments
 
@@ -85,3 +133,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [releases]: https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/releases
 [forum-shield]: https://img.shields.io/badge/community-forum-brightgreen.svg?style=for-the-badge
 [forum]: https://community.home-assistant.io/
+[tests-shield]: https://img.shields.io/github/actions/workflow/status/nate-kelley-buster/rocky-mountain-power-home-assistant/tests.yml?style=for-the-badge&label=tests
+[tests]: https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/actions/workflows/tests.yml

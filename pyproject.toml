@@ -2,17 +2,22 @@
 name = "rocky-mountain-power-home-assistant"
 version = "0.1.0"
 description = "Home Assistant integration for Rocky Mountain Power using Playwright"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = {text = "MIT"}
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-homeassistant-custom-component",
     "python-dotenv>=1.0",
     "arrow>=1.3",
     "playwright>=1.49",
 ]
 
+[tool.setuptools.packages.find]
+include = ["custom_components*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
