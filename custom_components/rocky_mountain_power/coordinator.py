@@ -1,5 +1,6 @@
 """Coordinator to handle Rocky Mountain Power connections."""
 from datetime import timedelta
+import json
 import logging
 from types import MappingProxyType
 from typing import Any, cast
@@ -19,6 +20,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import DOMAIN
 from .rocky_mountain_power import (
     AggregateType,
+    CannotConnect,
     CostRead,
     InvalidAuth,
     RockyMountainPower,
@@ -117,8 +119,8 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                             "forecasted_cost_low": forecast.forecasted_cost_low,
                             "forecasted_cost_high": forecast.forecasted_cost_high,
                         }
-                except Exception:
-                    _LOGGER.warning("Failed to fetch forecast for %s", acct_num, exc_info=True)
+                except (CannotConnect, json.JSONDecodeError, KeyError, ValueError) as err:
+                    _LOGGER.warning("Failed to fetch forecast for %s: %s", acct_num, err)
 
                 # Fetch billing info for this account
                 try:
@@ -132,8 +134,8 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                             "last_payment_date": billing.last_payment_date,
                             "next_statement_date": billing.next_statement_date,
                         }
-                except Exception:
-                    _LOGGER.warning("Failed to fetch billing for %s", acct_num, exc_info=True)
+                except (CannotConnect, json.JSONDecodeError, KeyError, ValueError) as err:
+                    _LOGGER.warning("Failed to fetch billing for %s: %s", acct_num, err)
 
             _LOGGER.debug("Updating sensor data: %s", result)
 
@@ -149,8 +151,8 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 )
                 try:
                     await self._insert_statistics()
-                except Exception:
-                    _LOGGER.warning("Failed to insert statistics for %s", acct.account_number, exc_info=True)
+                except (CannotConnect, json.JSONDecodeError, KeyError, ValueError) as err:
+                    _LOGGER.warning("Failed to insert statistics for %s: %s", acct.account_number, err)
         finally:
             await self.hass.async_add_executor_job(self.api.end_session)
 
@@ -197,9 +199,20 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 None,
                 {"sum"},
             )
-            cost_sum = cast(float, stats[cost_statistic_id][0]["sum"])
-            consumption_sum = cast(float, stats[consumption_statistic_id][0]["sum"])
-            last_stats_time = stats[cost_statistic_id][0]["start"]
+            if (
+                cost_statistic_id not in stats
+                or not stats[cost_statistic_id]
+                or consumption_statistic_id not in stats
+                or not stats[consumption_statistic_id]
+            ):
+                _LOGGER.debug("Previous statistics not found, starting fresh")
+                cost_sum = 0.0
+                consumption_sum = 0.0
+                last_stats_time = None
+            else:
+                cost_sum = cast(float, stats[cost_statistic_id][0]["sum"])
+                consumption_sum = cast(float, stats[consumption_statistic_id][0]["sum"])
+                last_stats_time = stats[cost_statistic_id][0]["start"]
 
         cost_statistics = []
         consumption_statistics = []

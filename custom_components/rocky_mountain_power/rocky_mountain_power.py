@@ -653,12 +653,13 @@ class RockyMountainPower:
         """Switch the active account on the RMP site."""
         return self.utility.switch_account(nickname)
 
-    def _get_account(self) -> Any:
+    def _get_account(self) -> dict:
         """Get account associated with the user."""
         if not self.account:
             self.login()
             self.account = self.utility.account
-        assert self.account
+        if not self.account:
+            raise CannotConnect("No account data available after login")
         return self.account
 
     def get_cost_reads(
