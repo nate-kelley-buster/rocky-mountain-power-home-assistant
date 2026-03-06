@@ -1,0 +1,13 @@
+{
+  "domain": "rocky_mountain_power",
+  "name": "Rocky Mountain Power",
+  "version": "0.1.0",
+  "codeowners": ["@nate-kelley-buster"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant",
+  "issue_tracker": "https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/issues",
+  "iot_class": "cloud_polling",
+  "loggers": ["rocky_mountain_power"],
+  "requirements": ["playwright==1.49.1"]
+}
