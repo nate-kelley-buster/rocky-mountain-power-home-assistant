@@ -95,7 +95,8 @@ class RockyMountainPowerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Dialog that informs the user that reauth is required."""
-        assert self.reauth_entry
+        if not self.reauth_entry:
+            return self.async_abort(reason="unknown")
         errors: dict[str, str] = {}
         if user_input is not None:
             data = {**self.reauth_entry.data, **user_input}

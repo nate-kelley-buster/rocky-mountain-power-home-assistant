@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import arrow
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeout
@@ -12,13 +12,15 @@ from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _parse_dollar(value: str) -> float | None:
+def _parse_dollar(value: str | None) -> float | None:
     """Parse a dollar string like '$123.45' or '1,234.56' to float."""
     if not value:
         return None
     cleaned = value.strip().lstrip("$").replace(",", "")
+    if not cleaned:
+        return None
     try:
-        return float(cleaned) or None
+        return float(cleaned)
     except ValueError:
         return None
 
@@ -90,12 +92,12 @@ class BillingInfo:
 
     account: Account
     current_balance: float
-    due_date: Optional[date]
+    due_date: date | None
     past_due_amount: float
     last_payment_amount: float
-    last_payment_date: Optional[date]
-    next_statement_date: Optional[date]
-    enrolled_payment_program: Optional[str]
+    last_payment_date: date | None
+    next_statement_date: date | None
+    enrolled_payment_program: str | None
 
 
 @dataclasses.dataclass
@@ -160,7 +162,7 @@ class RockyMountainPowerUtility:
     TZ = "America/Denver"
 
     def __init__(self) -> None:
-        self.user_id: Optional[str] = None
+        self.user_id: str | None = None
         self.account: dict = {}
         self.accounts: list[dict] = []
         self.forecast: dict = {}
@@ -522,7 +524,7 @@ class RockyMountainPower:
         self._username: str = username
         self._password: str = password
         self.account: dict = {}
-        self.customer_id: Optional[str] = None
+        self.customer_id: str | None = None
         self.utility: RockyMountainPowerUtility = RockyMountainPowerUtility()
 
     def login(self) -> None:
@@ -587,7 +589,7 @@ class RockyMountainPower:
             )
         return forecasts
 
-    def get_billing_info(self) -> Optional[BillingInfo]:
+    def get_billing_info(self) -> BillingInfo | None:
         """Get billing and payment info for the active account."""
         info = self.utility.get_billing_info()
         if info is None:
@@ -645,7 +647,7 @@ class RockyMountainPower:
     def get_cost_reads(
         self,
         aggregate_type: AggregateType,
-        period: Optional[int] = 1,
+        period: int | None = 1,
     ) -> list[CostRead]:
         """Get usage and cost data aggregated by month/day/hour."""
         reads = self._get_dated_data(aggregate_type, period=period)
@@ -662,7 +664,7 @@ class RockyMountainPower:
     def _get_dated_data(
         self,
         aggregate_type: AggregateType,
-        period: Optional[int] = 1,
+        period: int | None = 1,
     ) -> list[dict]:
         """Dispatch to the correct usage method based on aggregate type."""
         if aggregate_type == AggregateType.MONTH:

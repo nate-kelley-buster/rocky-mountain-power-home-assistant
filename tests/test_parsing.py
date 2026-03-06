@@ -60,7 +60,7 @@ class TestParseDollar:
         assert _parse_dollar("  $100  ") == 100.0
 
     def test_zero(self):
-        assert _parse_dollar("$0") is None  # 0.0 is falsy, returns None
+        assert _parse_dollar("$0") == 0.0
 
     def test_invalid(self):
         assert _parse_dollar("not a number") is None
