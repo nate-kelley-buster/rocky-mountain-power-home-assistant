@@ -161,6 +161,49 @@ HOURLY_USAGE_RESPONSE = """{
     }
 }"""
 
+FIFTEEN_MIN_USAGE_RESPONSE = """{
+    "getIntervalUsageForDateResponseBody": {
+        "response": {
+            "intervalDataResponse": [
+                {
+                    "readDate": "2023-11-22",
+                    "readTime": "00:15",
+                    "usage": "0.412"
+                },
+                {
+                    "readDate": "2023-11-22",
+                    "readTime": "00:30",
+                    "usage": "0.389"
+                },
+                {
+                    "readDate": "2023-11-22",
+                    "readTime": "00:45",
+                    "usage": "0.401"
+                },
+                {
+                    "readDate": "2023-11-22",
+                    "readTime": "01:00",
+                    "usage": "0.480"
+                }
+            ]
+        }
+    }
+}"""
+
+SINGLE_ENTRY_USAGE_RESPONSE = """{
+    "getIntervalUsageForDateResponseBody": {
+        "response": {
+            "intervalDataResponse": [
+                {
+                    "readDate": "2023-11-22",
+                    "readTime": "01:00",
+                    "usage": "1.500"
+                }
+            ]
+        }
+    }
+}"""
+
 EMPTY_MONTHLY_RESPONSE = """{
     "getUsageHistoryAndGraphDataV1ResponseBody": {
         "usageHistory": {

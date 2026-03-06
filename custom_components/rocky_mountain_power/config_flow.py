@@ -7,11 +7,15 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 
-from .const import DOMAIN
+from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .rocky_mountain_power import (
     CannotConnect,
     InvalidAuth,
@@ -50,6 +54,14 @@ class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for RockyMountainPower."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry,
+    ) -> RockyMountainPowerOptionsFlow:
+        """Get the options flow handler."""
+        return RockyMountainPowerOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -112,4 +124,29 @@ class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+
+class RockyMountainPowerOptionsFlow(OptionsFlow):
+    """Handle options for Rocky Mountain Power."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage integration options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current = self.config_entry.options.get(
+            CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_UPDATE_INTERVAL, default=current
+                    ): vol.In({1: "1 hour", 2: "2 hours", 4: "4 hours", 6: "6 hours", 8: "8 hours", 12: "12 hours", 24: "24 hours"}),
+                }
+            ),
         )

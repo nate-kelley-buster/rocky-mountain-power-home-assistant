@@ -1,5 +1,5 @@
 """Tests for the Rocky Mountain Power coordinator."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,7 +9,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.rocky_mountain_power.const import DOMAIN
+from custom_components.rocky_mountain_power.const import (
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+)
 from custom_components.rocky_mountain_power.coordinator import (
     RockyMountainPowerCoordinator,
 )
@@ -210,6 +214,35 @@ async def test_deduplicate_cost_reads() -> None:
     result = RockyMountainPowerCoordinator._deduplicate_cost_reads([daily, hourly])
     assert len(result) == 1
     assert result[0].consumption == 1.5
+
+
+async def test_coordinator_uses_default_update_interval(
+    hass: HomeAssistant,
+) -> None:
+    """Test that the coordinator defaults to 12 hours when no option is set."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        unique_id="test@example.com",
+    )
+    entry.add_to_hass(hass)
+    coord = RockyMountainPowerCoordinator(hass, entry)
+    assert coord.update_interval == timedelta(hours=DEFAULT_UPDATE_INTERVAL)
+
+
+async def test_coordinator_uses_custom_update_interval(
+    hass: HomeAssistant,
+) -> None:
+    """Test that the coordinator reads the update interval from options."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        options={CONF_UPDATE_INTERVAL: 6},
+        unique_id="test@example.com",
+    )
+    entry.add_to_hass(hass)
+    coord = RockyMountainPowerCoordinator(hass, entry)
+    assert coord.update_interval == timedelta(hours=6)
 
 
 async def test_deduplicate_preserves_non_overlapping() -> None:

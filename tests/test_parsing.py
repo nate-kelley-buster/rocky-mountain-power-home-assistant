@@ -26,11 +26,13 @@ from tests.conftest import (
     EMPTY_DAILY_RESPONSE,
     EMPTY_HOURLY_RESPONSE,
     EMPTY_MONTHLY_RESPONSE,
+    FIFTEEN_MIN_USAGE_RESPONSE,
     HOURLY_USAGE_RESPONSE,
     METER_TYPE_RESPONSE,
     MONTHLY_USAGE_NO_ELAPSED_DAYS,
     MONTHLY_USAGE_RESPONSE,
     MULTI_ACCOUNT_LIST_RESPONSE,
+    SINGLE_ENTRY_USAGE_RESPONSE,
     USER_ME_RESPONSE,
 )
 
@@ -176,8 +178,8 @@ class TestDailyUsageParsing:
             assert diff.days == 1
 
 
-class TestHourlyUsageParsing:
-    """Test parsing of hourly usage XHR responses."""
+class TestIntervalUsageParsing:
+    """Test parsing of interval usage XHR responses (hourly and 15-minute)."""
 
     @patch.object(RockyMountainPowerUtility, "goto_energy_usage")
     @patch.object(RockyMountainPowerUtility, "_select_usage_option")
@@ -188,7 +190,7 @@ class TestHourlyUsageParsing:
         util.xhrs = {xhr_url: HOURLY_USAGE_RESPONSE}
         util._page = MagicMock()
 
-        result = util.get_usage_by_hour(days=1)
+        result = util.get_usage_by_interval(days=1)
 
         assert len(result) == 3
         assert result[0]["usage"] == 1.682
@@ -207,7 +209,7 @@ class TestHourlyUsageParsing:
         util.xhrs = {xhr_url: HOURLY_USAGE_RESPONSE}
         util._page = MagicMock()
 
-        result = util.get_usage_by_hour(days=1)
+        result = util.get_usage_by_interval(days=1)
 
         last_entry = result[2]
         assert last_entry["endTime"].hour == 23
@@ -223,22 +225,139 @@ class TestHourlyUsageParsing:
         util.xhrs = {xhr_url: EMPTY_HOURLY_RESPONSE}
         util._page = MagicMock()
 
-        result = util.get_usage_by_hour(days=1)
+        result = util.get_usage_by_interval(days=1)
         assert result == []
 
     @patch.object(RockyMountainPowerUtility, "goto_energy_usage")
     @patch.object(RockyMountainPowerUtility, "_select_usage_option")
     @patch.object(RockyMountainPowerUtility, "_wait_for_xhr", return_value=True)
-    def test_hourly_start_time_is_one_hour_before_end(self, mock_wait, mock_select, mock_goto):
+    def test_hourly_interval_detected_as_one_hour(self, mock_wait, mock_select, mock_goto):
+        """Hourly data should produce 1-hour intervals between start and end."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
         util = RockyMountainPowerUtility()
         util.xhrs = {xhr_url: HOURLY_USAGE_RESPONSE}
         util._page = MagicMock()
 
-        result = util.get_usage_by_hour(days=1)
+        result = util.get_usage_by_interval(days=1)
         for entry in result:
             diff = entry["endTime"] + timedelta(seconds=1) - entry["startTime"]
             assert diff.total_seconds() == 3600
+
+    @patch.object(RockyMountainPowerUtility, "goto_energy_usage")
+    @patch.object(RockyMountainPowerUtility, "_select_usage_option")
+    @patch.object(RockyMountainPowerUtility, "_wait_for_xhr", return_value=True)
+    def test_parse_fifteen_min_usage(self, mock_wait, mock_select, mock_goto):
+        """15-minute interval data should be parsed with correct intervals."""
+        xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
+        util = RockyMountainPowerUtility()
+        util.xhrs = {xhr_url: FIFTEEN_MIN_USAGE_RESPONSE}
+        util._page = MagicMock()
+
+        result = util.get_usage_by_interval(days=1)
+
+        assert len(result) == 4
+        assert result[0]["usage"] == 0.412
+        assert result[1]["usage"] == 0.389
+        assert result[2]["usage"] == 0.401
+        assert result[3]["usage"] == 0.480
+
+    @patch.object(RockyMountainPowerUtility, "goto_energy_usage")
+    @patch.object(RockyMountainPowerUtility, "_select_usage_option")
+    @patch.object(RockyMountainPowerUtility, "_wait_for_xhr", return_value=True)
+    def test_fifteen_min_interval_detected(self, mock_wait, mock_select, mock_goto):
+        """15-minute data should produce 15-minute intervals between start and end."""
+        xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
+        util = RockyMountainPowerUtility()
+        util.xhrs = {xhr_url: FIFTEEN_MIN_USAGE_RESPONSE}
+        util._page = MagicMock()
+
+        result = util.get_usage_by_interval(days=1)
+        for entry in result:
+            diff = entry["endTime"] + timedelta(seconds=1) - entry["startTime"]
+            assert diff.total_seconds() == 900  # 15 minutes
+
+    @patch.object(RockyMountainPowerUtility, "goto_energy_usage")
+    @patch.object(RockyMountainPowerUtility, "_select_usage_option")
+    @patch.object(RockyMountainPowerUtility, "_wait_for_xhr", return_value=True)
+    def test_fifteen_min_start_times_are_correct(self, mock_wait, mock_select, mock_goto):
+        """Verify each 15-minute entry has non-overlapping start/end times."""
+        xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
+        util = RockyMountainPowerUtility()
+        util.xhrs = {xhr_url: FIFTEEN_MIN_USAGE_RESPONSE}
+        util._page = MagicMock()
+
+        result = util.get_usage_by_interval(days=1)
+
+        assert result[0]["startTime"].minute == 0
+        assert result[0]["endTime"].minute == 14
+        assert result[1]["startTime"].minute == 15
+        assert result[1]["endTime"].minute == 29
+        assert result[2]["startTime"].minute == 30
+        assert result[2]["endTime"].minute == 44
+        assert result[3]["startTime"].minute == 45
+        assert result[3]["endTime"].minute == 59
+
+    @patch.object(RockyMountainPowerUtility, "goto_energy_usage")
+    @patch.object(RockyMountainPowerUtility, "_select_usage_option")
+    @patch.object(RockyMountainPowerUtility, "_wait_for_xhr", return_value=True)
+    def test_single_entry_falls_back_to_one_hour(self, mock_wait, mock_select, mock_goto):
+        """With only one data point, interval detection falls back to 1 hour."""
+        xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
+        util = RockyMountainPowerUtility()
+        util.xhrs = {xhr_url: SINGLE_ENTRY_USAGE_RESPONSE}
+        util._page = MagicMock()
+
+        result = util.get_usage_by_interval(days=1)
+        assert len(result) == 1
+        diff = result[0]["endTime"] + timedelta(seconds=1) - result[0]["startTime"]
+        assert diff.total_seconds() == 3600
+
+
+class TestDetectInterval:
+    """Test the _detect_interval static method."""
+
+    def test_detects_hourly_interval(self):
+        entries = [
+            {"readDate": "2023-11-22", "readTime": "01:00"},
+            {"readDate": "2023-11-22", "readTime": "02:00"},
+        ]
+        result = RockyMountainPowerUtility._detect_interval(entries)
+        assert result.total_seconds() == 3600
+
+    def test_detects_fifteen_min_interval(self):
+        entries = [
+            {"readDate": "2023-11-22", "readTime": "00:15"},
+            {"readDate": "2023-11-22", "readTime": "00:30"},
+        ]
+        result = RockyMountainPowerUtility._detect_interval(entries)
+        assert result.total_seconds() == 900
+
+    def test_detects_thirty_min_interval(self):
+        entries = [
+            {"readDate": "2023-11-22", "readTime": "00:30"},
+            {"readDate": "2023-11-22", "readTime": "01:00"},
+        ]
+        result = RockyMountainPowerUtility._detect_interval(entries)
+        assert result.total_seconds() == 1800
+
+    def test_single_entry_defaults_to_one_hour(self):
+        entries = [{"readDate": "2023-11-22", "readTime": "01:00"}]
+        result = RockyMountainPowerUtility._detect_interval(entries)
+        assert result.total_seconds() == 3600
+
+    def test_empty_entries_defaults_to_one_hour(self):
+        result = RockyMountainPowerUtility._detect_interval([])
+        assert result.total_seconds() == 3600
+
+    def test_handles_24_00_in_entries(self):
+        """24:00 gets converted to 00:00, which may produce a negative diff;
+        the method should fall back to 1 hour in that case."""
+        entries = [
+            {"readDate": "2023-11-22", "readTime": "23:00"},
+            {"readDate": "2023-11-22", "readTime": "24:00"},
+        ]
+        result = RockyMountainPowerUtility._detect_interval(entries)
+        assert result.total_seconds() == 3600
 
 
 class TestForecastParsing:
@@ -382,9 +501,9 @@ class TestRockyMountainPowerAPI:
             api.get_cost_reads(AggregateType.DAY, 3)
             mock_day.assert_called_once_with(months=3)
 
-        with patch.object(api.utility, "get_usage_by_hour", return_value=empty) as mock_hour:
+        with patch.object(api.utility, "get_usage_by_interval", return_value=empty) as mock_interval:
             api.get_cost_reads(AggregateType.HOUR, 7)
-            mock_hour.assert_called_once_with(days=7)
+            mock_interval.assert_called_once_with(days=7)
 
     def test_get_cost_reads_invalid_aggregate_type(self):
         api = RockyMountainPower("user", "pass")

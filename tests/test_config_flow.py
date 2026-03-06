@@ -8,7 +8,11 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from custom_components.rocky_mountain_power.const import DOMAIN
+from custom_components.rocky_mountain_power.const import (
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+)
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -191,3 +195,86 @@ async def test_reauth_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> N
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
+
+
+async def test_options_flow_shows_default(hass: HomeAssistant, recorder_mock) -> None:
+    """Test that the options flow shows the default update interval."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        unique_id="test@example.com",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.rocky_mountain_power.coordinator.RockyMountainPowerCoordinator._async_update_data",
+        return_value={},
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+
+async def test_options_flow_saves_custom_interval(
+    hass: HomeAssistant, recorder_mock
+) -> None:
+    """Test that the options flow saves a custom polling interval."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        unique_id="test@example.com",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.rocky_mountain_power.coordinator.RockyMountainPowerCoordinator._async_update_data",
+        return_value={},
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_UPDATE_INTERVAL: 6},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_UPDATE_INTERVAL] == 6
+
+
+async def test_options_flow_preserves_existing_value(
+    hass: HomeAssistant, recorder_mock
+) -> None:
+    """Test that the options flow shows the previously saved value."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        options={CONF_UPDATE_INTERVAL: 8},
+        unique_id="test@example.com",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.rocky_mountain_power.coordinator.RockyMountainPowerCoordinator._async_update_data",
+        return_value={},
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["type"] is FlowResultType.FORM
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={CONF_UPDATE_INTERVAL: 8},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_UPDATE_INTERVAL] == 8

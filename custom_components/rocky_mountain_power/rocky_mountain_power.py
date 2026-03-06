@@ -478,8 +478,8 @@ class RockyMountainPowerUtility:
                     break
         return usage
 
-    def get_usage_by_hour(self, days: int = 1) -> list[dict]:
-        """Get hourly usage data, paginating back the specified number of days."""
+    def get_usage_by_interval(self, days: int = 1) -> list[dict]:
+        """Get interval usage data (hourly or 15-minute), paginating back the specified number of days."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
         self.goto_energy_usage()
         self._select_usage_option(-1)
@@ -490,12 +490,19 @@ class RockyMountainPowerUtility:
             if xhr_url not in self.xhrs:
                 break
             details = json.loads(self.xhrs[xhr_url])
-            for d in details.get("getIntervalUsageForDateResponseBody", {}).get("response", {}).get("intervalDataResponse", []):
+            entries = (
+                details
+                .get("getIntervalUsageForDateResponseBody", {})
+                .get("response", {})
+                .get("intervalDataResponse", [])
+            )
+            interval = self._detect_interval(entries)
+            for d in entries:
                 end_time = arrow.get(
                     datetime.fromisoformat(f"{d['readDate']}T{d['readTime'].replace('24', '00')}:00"),
                     self.TZ,
                 ).datetime
-                start_time = end_time - timedelta(hours=1)
+                start_time = end_time - interval
                 usage.append({
                     "startTime": start_time,
                     "endTime": end_time - timedelta(seconds=1),
@@ -510,6 +517,29 @@ class RockyMountainPowerUtility:
                 if not self._wait_for_xhr(xhr_url):
                     break
         return usage
+
+    @staticmethod
+    def _detect_interval(entries: list[dict]) -> timedelta:
+        """Detect the read interval from consecutive entries.
+
+        Compares the first two readTime values to determine whether the meter
+        reports at 15-minute or 1-hour (or other) granularity. Falls back to
+        1 hour when there are fewer than two entries.
+        """
+        if len(entries) < 2:
+            return timedelta(hours=1)
+
+        def _parse_entry_time(entry: dict) -> datetime:
+            time_str = entry["readTime"].replace("24", "00")
+            return datetime.fromisoformat(f"{entry['readDate']}T{time_str}:00")
+
+        t1 = _parse_entry_time(entries[0])
+        t2 = _parse_entry_time(entries[1])
+        diff = t2 - t1
+
+        if diff.total_seconds() > 0:
+            return diff
+        return timedelta(hours=1)
 
 
 class RockyMountainPower:
@@ -672,6 +702,6 @@ class RockyMountainPower:
         elif aggregate_type == AggregateType.DAY:
             return self.utility.get_usage_by_day(months=period)
         elif aggregate_type == AggregateType.HOUR:
-            return self.utility.get_usage_by_hour(days=period)
+            return self.utility.get_usage_by_interval(days=period)
         else:
             raise ValueError(f"aggregate_type {aggregate_type} is not valid")

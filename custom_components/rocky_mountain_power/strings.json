@@ -1,4 +1,18 @@
 {
+  "options": {
+    "step": {
+      "init": {
+        "title": "Rocky Mountain Power Options",
+        "description": "Configure how often the integration polls for new data.",
+        "data": {
+          "update_interval": "Update interval (hours)"
+        },
+        "data_description": {
+          "update_interval": "How often to fetch new data from Rocky Mountain Power (1–24 hours). Lower values use more resources."
+        }
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {

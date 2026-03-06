@@ -22,7 +22,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util.unit_conversion import EnergyConverter
 
-from .const import DOMAIN
+from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .rocky_mountain_power import (
     AggregateType,
     CannotConnect,
@@ -52,7 +52,11 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             _LOGGER,
             config_entry=config_entry,
             name="Rocky Mountain Power",
-            update_interval=timedelta(hours=12),
+            update_interval=timedelta(
+                hours=config_entry.options.get(
+                    CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+                )
+            ),
         )
         self.api = RockyMountainPower(
             config_entry.data[CONF_USERNAME],
