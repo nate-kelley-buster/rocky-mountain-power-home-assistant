@@ -159,11 +159,11 @@ class RockyMountainPowerUtility:
     LOGIN_URL = "https://csapps.rockymountainpower.net/idm/login"
     TZ = "America/Denver"
 
-    def __init__(self):
-        self.user_id = None
-        self.account = {}
+    def __init__(self) -> None:
+        self.user_id: Optional[str] = None
+        self.account: dict = {}
         self.accounts: list[dict] = []
-        self.forecast = {}
+        self.forecast: dict = {}
         self.xhrs: dict[str, str] = {}
         self._playwright = None
         self._browser: Browser | None = None
@@ -190,7 +190,7 @@ class RockyMountainPowerUtility:
         _LOGGER.debug("No elements found for selectors: %s", selectors)
         return []
 
-    def _on_response(self, response):
+    def _on_response(self, response) -> None:
         """Capture XHR JSON responses."""
         if "json" in (response.headers.get("content-type", "")):
             try:
@@ -198,7 +198,7 @@ class RockyMountainPowerUtility:
             except Exception:
                 _LOGGER.debug("Failed to capture XHR response for %s", response.url)
 
-    def on_quit(self, *args, **kwargs):
+    def on_quit(self, *args, **kwargs) -> None:
         """Close the browser and clean up resources."""
         try:
             if self._context:
@@ -214,7 +214,7 @@ class RockyMountainPowerUtility:
         self._browser = None
         self._playwright = None
 
-    def init_browser(self):
+    def init_browser(self) -> None:
         """Launch a headless Chromium browser."""
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
@@ -222,8 +222,11 @@ class RockyMountainPowerUtility:
         self._page = self._context.new_page()
         self._page.on("response", self._on_response)
 
-    def login(self, username, password):
-        """Navigate to the RMP login page, authenticate, and capture account data."""
+    def login(self, username: str, password: str) -> dict[str, str]:
+        """Navigate to the RMP login page, authenticate, and capture account data.
+
+        Returns the captured XHR responses dict.
+        """
         self.init_browser()
         page = self._page
 
@@ -316,7 +319,7 @@ class RockyMountainPowerUtility:
         page.keyboard.press("Escape")
         return False
 
-    def goto_energy_usage(self):
+    def goto_energy_usage(self) -> None:
         """Navigate to the energy usage page."""
         page = self._page
         page.goto("https://csapps.rockymountainpower.net/secure/my-account/energy-usage")
@@ -326,7 +329,7 @@ class RockyMountainPowerUtility:
             _LOGGER.error("Timed out waiting for energy usage page")
             raise CannotConnect from err
 
-    def goto_billing(self):
+    def goto_billing(self) -> None:
         """Navigate to the billing & payment history page."""
         page = self._page
         page.goto("https://csapps.rockymountainpower.net/secure/my-account/billing-payment-history")
@@ -353,7 +356,7 @@ class RockyMountainPowerUtility:
             return details.get("getAccountInfoResponseBody", {}).get("accountInfo", {})
         return None
 
-    def get_forecast(self):
+    def get_forecast(self) -> dict:
         """Navigate to the energy usage page and capture the forecast XHR."""
         self.goto_energy_usage()
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getMeterType"
@@ -377,7 +380,7 @@ class RockyMountainPowerUtility:
             _LOGGER.debug("XHR not captured within %dms: %s", timeout, xhr_url)
         return xhr_url in self.xhrs
 
-    def _select_usage_option(self, option_index: int):
+    def _select_usage_option(self, option_index: int) -> None:
         """Click the usage dropdown and select an option by index."""
         page = self._page
         dropdowns = self._query_selector_all_with_fallback(_SELECTORS["usage_dropdown"])
@@ -411,7 +414,7 @@ class RockyMountainPowerUtility:
             _LOGGER.debug("Failed to click PREVIOUS button", exc_info=True)
             return False
 
-    def get_usage_by_month(self):
+    def get_usage_by_month(self) -> list[dict]:
         """Get monthly usage data from the energy usage page."""
         xhr_url = "https://csapps.rockymountainpower.net/api/account/getUsageHistoryAndGraphDataV1"
         self.goto_energy_usage()
@@ -419,7 +422,7 @@ class RockyMountainPowerUtility:
         self._wait_for_xhr(xhr_url)
 
         details = json.loads(self.xhrs.get(xhr_url, "{}"))
-        usage = []
+        usage: list[dict] = []
         for d in details.get("getUsageHistoryAndGraphDataV1ResponseBody", {}).get("usageHistory", {}).get("usageHistoryLineItem", []):
             end_date = d.get("usagePeriodEndDate")
             if not end_date:
@@ -439,14 +442,14 @@ class RockyMountainPowerUtility:
             })
         return usage
 
-    def get_usage_by_day(self, months=1):
+    def get_usage_by_day(self, months: int = 1) -> list[dict]:
         """Get daily usage data, paginating back the specified number of months."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getUsageForDateRange"
         self.goto_energy_usage()
         self._select_usage_option(2)
         self._wait_for_xhr(xhr_url)
 
-        usage = []
+        usage: list[dict] = []
         while months > 0:
             if xhr_url not in self.xhrs:
                 break
@@ -473,37 +476,14 @@ class RockyMountainPowerUtility:
                     break
         return usage
 
-    def download_daily_usage(self):
-        """Download Green Button data from the energy usage page."""
-        self.goto_energy_usage()
-        page = self._page
-        dropdowns = self._query_selector_all_with_fallback(_SELECTORS["usage_dropdown"])
-        if len(dropdowns) <= 3:
-            _LOGGER.warning("Could not find usage dropdown for Green Button download")
-            return None
-        dropdowns[3].click()
-        page.wait_for_timeout(500)
-        options = self._query_selector_all_with_fallback(_SELECTORS["usage_option"])
-        if not options:
-            _LOGGER.warning("No usage options found for Green Button download")
-            return None
-        options[-1].click()
-
-        with page.expect_download() as download_info:
-            page.click("text=DOWNLOAD GREEN BUTTON DATA")
-        download = download_info.value
-        path = download.path()
-        with open(path, "r") as file:
-            return file.read()
-
-    def get_usage_by_hour(self, days=1):
+    def get_usage_by_hour(self, days: int = 1) -> list[dict]:
         """Get hourly usage data, paginating back the specified number of days."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
         self.goto_energy_usage()
         self._select_usage_option(-1)
         self._wait_for_xhr(xhr_url)
 
-        usage = []
+        usage: list[dict] = []
         while days > 0:
             if xhr_url not in self.xhrs:
                 break
@@ -539,10 +519,10 @@ class RockyMountainPower:
         password: str,
     ) -> None:
         """Initialize."""
-        self.username: str = username
-        self.password: str = password
-        self.account = {}
-        self.customer_id = None
+        self._username: str = username
+        self._password: str = password
+        self.account: dict = {}
+        self.customer_id: Optional[str] = None
         self.utility: RockyMountainPowerUtility = RockyMountainPowerUtility()
 
     def login(self) -> None:
@@ -551,7 +531,7 @@ class RockyMountainPower:
         :raises InvalidAuth: if login information is incorrect
         :raises CannotConnect: if we receive any HTTP error
         """
-        self.utility.login(self.username, self.password)
+        self.utility.login(self._username, self._password)
         if not self.account:
             self.account = self.utility.account
         if not self.customer_id:
@@ -586,7 +566,7 @@ class RockyMountainPower:
 
     def get_forecast(self) -> list[Forecast]:
         """Get current and forecasted usage and cost for the current monthly bill."""
-        forecasts = []
+        forecasts: list[Forecast] = []
         self.utility.get_forecast()
         if self.utility.forecast:
             forecast = self.utility.forecast
@@ -654,7 +634,7 @@ class RockyMountainPower:
         return self.utility.switch_account(nickname)
 
     def _get_account(self) -> dict:
-        """Get account associated with the user."""
+        """Get account associated with the user, logging in if needed."""
         if not self.account:
             self.login()
             self.account = self.utility.account
@@ -683,7 +663,8 @@ class RockyMountainPower:
         self,
         aggregate_type: AggregateType,
         period: Optional[int] = 1,
-    ) -> list[Any]:
+    ) -> list[dict]:
+        """Dispatch to the correct usage method based on aggregate type."""
         if aggregate_type == AggregateType.MONTH:
             return self.utility.get_usage_by_month()
         elif aggregate_type == AggregateType.DAY:

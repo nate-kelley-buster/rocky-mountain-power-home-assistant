@@ -46,7 +46,7 @@ class TestLiveLogin:
 
     def test_login_succeeds(self, api):
         _print_header("LOGIN TEST")
-        print(f"  Attempting login as: {api.username}")
+        print(f"  Attempting login as: {api._username}")
 
         api.login()
 
@@ -303,7 +303,7 @@ class TestLiveFullFlow:
         _print_header("FULL END-TO-END FLOW TEST")
 
         # Login
-        print(f"\n  [1/7] Logging in as {api.username}...")
+        print(f"\n  [1/7] Logging in as {api._username}...")
         api.login()
         assert api.customer_id is not None
         print(f"        Customer ID: {api.customer_id}")

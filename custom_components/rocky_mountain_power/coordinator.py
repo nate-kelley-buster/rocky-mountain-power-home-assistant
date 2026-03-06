@@ -13,7 +13,7 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, UnitOfEnergy
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -51,15 +51,10 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             entry_data[CONF_PASSWORD],
         )
 
-        @callback
-        def _dummy_listener() -> None:
-            pass
-
-        # Force the coordinator to periodically update by registering at least one listener.
-        # Needed when the _async_update_data below returns {} for utilities that don't provide
-        # forecast, which results to no sensors added, no registered listeners, and thus
-        # _async_update_data not periodically getting called which is needed for _insert_statistics.
-        self.async_add_listener(_dummy_listener)
+        # Register a listener to ensure periodic updates even when no sensors
+        # are registered (e.g., accounts with no forecast data). Required
+        # because _async_update_data must run periodically for _insert_statistics.
+        self.async_add_listener(lambda: None)
 
     async def _async_update_data(
         self,
