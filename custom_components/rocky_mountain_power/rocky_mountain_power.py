@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Optional
 
 import arrow
-from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
+from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,7 +117,45 @@ class UsageRead:
     consumption: float  # taken from consumption.value field, in KWH
 
 
+# CSS selectors with fallbacks for resilience against RMP site redesigns.
+_SELECTORS = {
+    "cookie_banner_btn": [
+        "wcss-cookie-banner>aside>button",
+        "wcss-cookie-banner button",
+        "button[class*='cookie']",
+    ],
+    "login_iframe": [
+        "iframe#loginframe",
+        "iframe[src*='login']",
+    ],
+    "account_picker": [
+        "wcss-account-picker mat-select",
+        "mat-select[aria-label*='account']",
+        "[class*='account-picker'] mat-select",
+    ],
+    "dropdown_option": [
+        "mat-option",
+        ".mat-option",
+    ],
+    "usage_dropdown": [
+        "div.mat-form-field-infix",
+        ".mat-form-field-infix",
+    ],
+    "usage_option": [
+        ".mat-option",
+        "mat-option",
+    ],
+    "prev_button": [
+        "button.link:has-text('PREVIOUS')",
+        "button:has-text('PREVIOUS')",
+        "button:has-text('Previous')",
+    ],
+}
+
+
 class RockyMountainPowerUtility:
+    """Browser automation for the Rocky Mountain Power website."""
+
     LOGIN_URL = "https://csapps.rockymountainpower.net/idm/login"
     TZ = "America/Denver"
 
@@ -132,6 +170,26 @@ class RockyMountainPowerUtility:
         self._context: BrowserContext | None = None
         self._page: Page | None = None
 
+    def _query_selector_with_fallback(self, selectors: list[str]) -> Any | None:
+        """Try multiple CSS selectors, returning the first match."""
+        page = self._page
+        for selector in selectors:
+            el = page.query_selector(selector)
+            if el:
+                return el
+        _LOGGER.debug("No element found for selectors: %s", selectors)
+        return None
+
+    def _query_selector_all_with_fallback(self, selectors: list[str]) -> list:
+        """Try multiple CSS selectors, returning results from the first that matches."""
+        page = self._page
+        for selector in selectors:
+            els = page.query_selector_all(selector)
+            if els:
+                return els
+        _LOGGER.debug("No elements found for selectors: %s", selectors)
+        return []
+
     def _on_response(self, response):
         """Capture XHR JSON responses."""
         if "json" in (response.headers.get("content-type", "")):
@@ -141,6 +199,7 @@ class RockyMountainPowerUtility:
                 _LOGGER.debug("Failed to capture XHR response for %s", response.url)
 
     def on_quit(self, *args, **kwargs):
+        """Close the browser and clean up resources."""
         try:
             if self._context:
                 self._context.close()
@@ -156,6 +215,7 @@ class RockyMountainPowerUtility:
         self._playwright = None
 
     def init_browser(self):
+        """Launch a headless Chromium browser."""
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         self._context = self._browser.new_context()
@@ -163,22 +223,34 @@ class RockyMountainPowerUtility:
         self._page.on("response", self._on_response)
 
     def login(self, username, password):
+        """Navigate to the RMP login page, authenticate, and capture account data."""
         self.init_browser()
         page = self._page
 
         page.goto(self.LOGIN_URL)
         try:
             page.wait_for_function("document.title === 'Sign in'", timeout=30000)
-        except Exception:
-            raise CannotConnect
+        except PlaywrightTimeout as err:
+            _LOGGER.error("Timed out waiting for login page to load")
+            raise CannotConnect from err
 
         # Dismiss cookie banner if present
-        cookie_btn = page.query_selector("wcss-cookie-banner>aside>button")
+        cookie_btn = self._query_selector_with_fallback(_SELECTORS["cookie_banner_btn"])
         if cookie_btn and cookie_btn.is_visible():
             cookie_btn.click()
 
         # Wait for and switch to login iframe
-        iframe_el = page.wait_for_selector("iframe#loginframe", timeout=30000)
+        iframe_el = None
+        for selector in _SELECTORS["login_iframe"]:
+            try:
+                iframe_el = page.wait_for_selector(selector, timeout=15000)
+                if iframe_el:
+                    break
+            except PlaywrightTimeout:
+                continue
+        if not iframe_el:
+            _LOGGER.error("Login iframe not found with any known selector")
+            raise CannotConnect
         frame = iframe_el.content_frame()
 
         frame.fill("input#signInName", username)
@@ -187,8 +259,9 @@ class RockyMountainPowerUtility:
 
         try:
             page.wait_for_function("document.title === 'My account'", timeout=30000)
-        except Exception:
-            raise InvalidAuth
+        except PlaywrightTimeout as err:
+            _LOGGER.error("Login failed — did not reach 'My account' page")
+            raise InvalidAuth from err
 
         # Wait for critical XHRs to be captured
         user_me_url = "https://csapps.rockymountainpower.net/api/user/me"
@@ -217,7 +290,7 @@ class RockyMountainPowerUtility:
             True if successfully switched, False if account not found.
         """
         page = self._page
-        picker = page.query_selector("wcss-account-picker mat-select")
+        picker = self._query_selector_with_fallback(_SELECTORS["account_picker"])
         if not picker:
             _LOGGER.warning("Account picker not found on page")
             return False
@@ -227,30 +300,31 @@ class RockyMountainPowerUtility:
         page.wait_for_timeout(1000)
 
         # Find and click the matching option
-        options = page.query_selector_all("mat-option")
+        options = self._query_selector_all_with_fallback(_SELECTORS["dropdown_option"])
         for opt in options:
             text = opt.evaluate("el => el.textContent.trim()")
             if nickname in text:
                 opt.click()
-                page.wait_for_timeout(3000)
-                # Clear cached XHRs so we get fresh data for the new account
+                # Wait for account data to reload via XHR
+                acct_info_url = "https://csapps.rockymountainpower.net/api/account/getAccountInfo"
                 self.xhrs.clear()
-                # Wait for the account data to load
-                page.wait_for_timeout(2000)
+                self._wait_for_xhr(acct_info_url, timeout=10000)
                 return True
 
         # Close dropdown if we didn't find a match
+        _LOGGER.warning("Account '%s' not found in picker options", nickname)
         page.keyboard.press("Escape")
         return False
 
     def goto_energy_usage(self):
+        """Navigate to the energy usage page."""
         page = self._page
         page.goto("https://csapps.rockymountainpower.net/secure/my-account/energy-usage")
         try:
             page.wait_for_function("document.title === 'Energy usage'", timeout=30000)
-            page.wait_for_timeout(3000)
-        except Exception:
-            raise CannotConnect
+        except PlaywrightTimeout as err:
+            _LOGGER.error("Timed out waiting for energy usage page")
+            raise CannotConnect from err
 
     def goto_billing(self):
         """Navigate to the billing & payment history page."""
@@ -261,11 +335,11 @@ class RockyMountainPowerUtility:
                 "document.title === 'Billing & payment history'",
                 timeout=30000,
             )
-            page.wait_for_timeout(3000)
-        except Exception:
-            raise CannotConnect
+        except PlaywrightTimeout as err:
+            _LOGGER.error("Timed out waiting for billing page")
+            raise CannotConnect from err
 
-    def get_billing_info(self) -> dict:
+    def get_billing_info(self) -> dict | None:
         """Get billing info from the account info XHR (captured during login/navigation)."""
         xhr_url = "https://csapps.rockymountainpower.net/api/account/getAccountInfo"
 
@@ -280,14 +354,10 @@ class RockyMountainPowerUtility:
         return None
 
     def get_forecast(self):
+        """Navigate to the energy usage page and capture the forecast XHR."""
         self.goto_energy_usage()
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getMeterType"
-        page = self._page
-        page.wait_for_timeout(2000)
-
-        if xhr_url not in self.xhrs:
-            # Wait a bit more for the XHR to come in
-            page.wait_for_timeout(5000)
+        self._wait_for_xhr(xhr_url, timeout=15000)
 
         if xhr_url in self.xhrs:
             details = json.loads(self.xhrs[xhr_url])
@@ -295,7 +365,7 @@ class RockyMountainPowerUtility:
 
         return self.forecast
 
-    def _wait_for_xhr(self, xhr_url: str, timeout: int = 30000):
+    def _wait_for_xhr(self, xhr_url: str, timeout: int = 30000) -> bool:
         """Wait for a specific XHR URL to appear in captured responses."""
         page = self._page
         interval = 500
@@ -303,36 +373,64 @@ class RockyMountainPowerUtility:
         while xhr_url not in self.xhrs and elapsed < timeout:
             page.wait_for_timeout(interval)
             elapsed += interval
+        if xhr_url not in self.xhrs:
+            _LOGGER.debug("XHR not captured within %dms: %s", timeout, xhr_url)
         return xhr_url in self.xhrs
 
     def _select_usage_option(self, option_index: int):
         """Click the usage dropdown and select an option by index."""
         page = self._page
-        dropdowns = page.query_selector_all("div.mat-form-field-infix")
+        dropdowns = self._query_selector_all_with_fallback(_SELECTORS["usage_dropdown"])
+        if len(dropdowns) <= 3:
+            _LOGGER.warning(
+                "Expected at least 4 usage dropdowns, found %d", len(dropdowns)
+            )
+            return
         dropdowns[3].click()
         page.wait_for_timeout(500)
-        options = page.query_selector_all(".mat-option")
-        options[option_index].click()
+        options = self._query_selector_all_with_fallback(_SELECTORS["usage_option"])
+        if not options:
+            _LOGGER.warning("No usage options found in dropdown")
+            return
+        # Clamp index to valid range
+        idx = option_index if option_index >= 0 else len(options) + option_index
+        if idx < 0 or idx >= len(options):
+            _LOGGER.warning("Usage option index %d out of range (0-%d)", option_index, len(options) - 1)
+            return
+        options[idx].click()
+
+    def _click_previous_button(self) -> bool:
+        """Click the PREVIOUS button to go back one period. Returns False if not found."""
+        prev_btn = self._query_selector_with_fallback(_SELECTORS["prev_button"])
+        if not prev_btn:
+            return False
+        try:
+            prev_btn.click()
+            return True
+        except Exception:
+            _LOGGER.debug("Failed to click PREVIOUS button", exc_info=True)
+            return False
 
     def get_usage_by_month(self):
+        """Get monthly usage data from the energy usage page."""
         xhr_url = "https://csapps.rockymountainpower.net/api/account/getUsageHistoryAndGraphDataV1"
         self.goto_energy_usage()
         self._select_usage_option(0)
         self._wait_for_xhr(xhr_url)
 
-        details = json.loads(self.xhrs[xhr_url])
+        details = json.loads(self.xhrs.get(xhr_url, "{}"))
         usage = []
         for d in details.get("getUsageHistoryAndGraphDataV1ResponseBody", {}).get("usageHistory", {}).get("usageHistoryLineItem", []):
-            end_time = arrow.get(datetime.fromisoformat(d["usagePeriodEndDate"]), self.TZ).datetime
+            end_date = d.get("usagePeriodEndDate")
+            if not end_date:
+                _LOGGER.debug("Skipping monthly entry with no usagePeriodEndDate")
+                continue
+            end_time = arrow.get(datetime.fromisoformat(end_date), self.TZ).datetime
             try:
                 start_time = end_time - timedelta(days=int(d["elapsedDays"]))
-            except KeyError:
+            except (KeyError, ValueError):
                 start_time = end_time.replace(day=1)
-            amount = None
-            try:
-                amount = _parse_dollar(d.get("invoiceAmount", ""))
-            except ValueError:
-                pass
+            amount = _parse_dollar(d.get("invoiceAmount", ""))
             usage.append({
                 "startTime": start_time,
                 "endTime": end_time - timedelta(seconds=1),
@@ -342,6 +440,7 @@ class RockyMountainPowerUtility:
         return usage
 
     def get_usage_by_day(self, months=1):
+        """Get daily usage data, paginating back the specified number of months."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getUsageForDateRange"
         self.goto_energy_usage()
         self._select_usage_option(2)
@@ -353,13 +452,12 @@ class RockyMountainPowerUtility:
                 break
             details = json.loads(self.xhrs[xhr_url])
             for d in details.get("getUsageForDateRangeResponseBody", {}).get("dailyUsageList", {}).get("usgHistoryLineItem", []):
-                end_time = arrow.get(datetime.fromisoformat(d["usagePeriodEndDate"]), self.TZ).datetime
+                end_date = d.get("usagePeriodEndDate")
+                if not end_date:
+                    continue
+                end_time = arrow.get(datetime.fromisoformat(end_date), self.TZ).datetime
                 start_time = end_time - timedelta(days=1)
-                amount = None
-                try:
-                    amount = _parse_dollar(d.get("dollerAmount", ""))
-                except ValueError:
-                    pass
+                amount = _parse_dollar(d.get("dollerAmount", ""))
                 usage.append({
                     "startTime": start_time,
                     "endTime": end_time - timedelta(seconds=1),
@@ -369,13 +467,7 @@ class RockyMountainPowerUtility:
             months -= 1
             if months > 0:
                 self.xhrs.pop(xhr_url, None)
-                page = self._page
-                prev_btn = page.query_selector("button.link:has-text('PREVIOUS')")
-                if not prev_btn:
-                    break
-                try:
-                    prev_btn.click()
-                except Exception:
+                if not self._click_previous_button():
                     break
                 if not self._wait_for_xhr(xhr_url):
                     break
@@ -385,10 +477,16 @@ class RockyMountainPowerUtility:
         """Download Green Button data from the energy usage page."""
         self.goto_energy_usage()
         page = self._page
-        dropdowns = page.query_selector_all("div.mat-form-field-infix")
+        dropdowns = self._query_selector_all_with_fallback(_SELECTORS["usage_dropdown"])
+        if len(dropdowns) <= 3:
+            _LOGGER.warning("Could not find usage dropdown for Green Button download")
+            return None
         dropdowns[3].click()
         page.wait_for_timeout(500)
-        options = page.query_selector_all(".mat-option")
+        options = self._query_selector_all_with_fallback(_SELECTORS["usage_option"])
+        if not options:
+            _LOGGER.warning("No usage options found for Green Button download")
+            return None
         options[-1].click()
 
         with page.expect_download() as download_info:
@@ -399,6 +497,7 @@ class RockyMountainPowerUtility:
             return file.read()
 
     def get_usage_by_hour(self, days=1):
+        """Get hourly usage data, paginating back the specified number of days."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
         self.goto_energy_usage()
         self._select_usage_option(-1)
@@ -424,13 +523,7 @@ class RockyMountainPowerUtility:
             days -= 1
             if days > 0:
                 self.xhrs.pop(xhr_url, None)
-                page = self._page
-                prev_btn = page.query_selector("button.link:has-text('PREVIOUS')")
-                if not prev_btn:
-                    break
-                try:
-                    prev_btn.click()
-                except Exception:
+                if not self._click_previous_button():
                     break
                 if not self._wait_for_xhr(xhr_url):
                     break
@@ -465,6 +558,7 @@ class RockyMountainPower:
             self.customer_id = self.utility.user_id
 
     def end_session(self) -> None:
+        """Close the browser and clean up resources."""
         self.utility.on_quit()
 
     def get_accounts(self) -> list[AccountInfo]:
@@ -597,44 +691,3 @@ class RockyMountainPower:
             return self.utility.get_usage_by_hour(days=period)
         else:
             raise ValueError(f"aggregate_type {aggregate_type} is not valid")
-
-
-if __name__ == '__main__':
-    api = RockyMountainPower(
-        'USERNAME',
-        'PASSWORD',
-    )
-
-    errors: dict[str, str] = {}
-    try:
-        api.login()
-        print("Logged in, trying to fetch forecasts")
-        forecasts = api.get_forecast()
-        print("Got forecasts")
-        print(forecasts)
-
-        print("\nAccounts:")
-        for acct in api.get_accounts():
-            print(f"  {acct.account_number} - {acct.nickname} ({acct.address})")
-
-        print("\nBilling info:")
-        billing = api.get_billing_info()
-        print(billing)
-
-        print("\nFetching cost reads")
-        cost_reads = api.get_cost_reads(AggregateType.MONTH)
-        print(cost_reads)
-    except InvalidAuth:
-        errors["base"] = "invalid_auth"
-    except CannotConnect:
-        errors["base"] = "cannot_connect"
-    except Exception as e:
-        print(f"Unhandled exception: {e.__class__.__name__}: {e}")
-    finally:
-        api.end_session()
-
-    if errors:
-        print("Got errors")
-        print(errors)
-    else:
-        print("No errors")

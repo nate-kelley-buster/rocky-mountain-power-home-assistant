@@ -91,7 +91,10 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 _LOGGER.debug("Fetching data for account %s (%s)", acct_num, nickname)
 
                 # Switch to this account on the RMP site
-                await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+                switched = await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+                if not switched:
+                    _LOGGER.warning("Failed to switch to account %s (%s), skipping", acct_num, nickname)
+                    continue
 
                 # Update internal account reference after switch
                 self.api.account = next(
@@ -106,37 +109,48 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 }
 
                 # Fetch forecast for this account
-                forecasts = await self.hass.async_add_executor_job(self.api.get_forecast)
-                for forecast in forecasts:
-                    result[acct_num]["forecast"] = {
-                        "forecasted_cost": forecast.forecasted_cost,
-                        "forecasted_cost_low": forecast.forecasted_cost_low,
-                        "forecasted_cost_high": forecast.forecasted_cost_high,
-                    }
+                try:
+                    forecasts = await self.hass.async_add_executor_job(self.api.get_forecast)
+                    for forecast in forecasts:
+                        result[acct_num]["forecast"] = {
+                            "forecasted_cost": forecast.forecasted_cost,
+                            "forecasted_cost_low": forecast.forecasted_cost_low,
+                            "forecasted_cost_high": forecast.forecasted_cost_high,
+                        }
+                except Exception:
+                    _LOGGER.warning("Failed to fetch forecast for %s", acct_num, exc_info=True)
 
                 # Fetch billing info for this account
-                billing = await self.hass.async_add_executor_job(self.api.get_billing_info)
-                if billing:
-                    result[acct_num]["billing"] = {
-                        "current_balance": billing.current_balance,
-                        "due_date": billing.due_date,
-                        "past_due_amount": billing.past_due_amount,
-                        "last_payment_amount": billing.last_payment_amount,
-                        "last_payment_date": billing.last_payment_date,
-                        "next_statement_date": billing.next_statement_date,
-                    }
+                try:
+                    billing = await self.hass.async_add_executor_job(self.api.get_billing_info)
+                    if billing:
+                        result[acct_num]["billing"] = {
+                            "current_balance": billing.current_balance,
+                            "due_date": billing.due_date,
+                            "past_due_amount": billing.past_due_amount,
+                            "last_payment_amount": billing.last_payment_amount,
+                            "last_payment_date": billing.last_payment_date,
+                            "next_statement_date": billing.next_statement_date,
+                        }
+                except Exception:
+                    _LOGGER.warning("Failed to fetch billing for %s", acct_num, exc_info=True)
 
             _LOGGER.debug("Updating sensor data: %s", result)
 
             # Insert energy statistics for each account
             for acct in active_accounts:
                 nickname = acct.nickname or acct.address or acct.account_number
-                await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+                switched = await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+                if not switched:
+                    continue
                 self.api.account = next(
                     (a for a in self.api.utility.accounts if a["accountNumber"] == acct.account_number),
                     self.api.account,
                 )
-                await self._insert_statistics()
+                try:
+                    await self._insert_statistics()
+                except Exception:
+                    _LOGGER.warning("Failed to insert statistics for %s", acct.account_number, exc_info=True)
         finally:
             await self.hass.async_add_executor_job(self.api.end_session)
 
@@ -238,19 +252,41 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
         )
 
     async def _async_get_all_cost_reads(self) -> list[CostRead]:
-        """Get all cost reads since account activation but at different resolutions depending on age.
+        """Get all cost reads since account activation at different resolutions.
 
-        - month resolution for all years (since account activation)
-        - day resolution for past 2 years
-        - hour resolution for past month
+        Fetches month, day, and hour granularity data. Deduplicates overlapping
+        time periods by keeping the finest granularity available for each start time.
         """
         cost_reads = []
         cost_reads.extend(await self.hass.async_add_executor_job(self.api.get_cost_reads, AggregateType.MONTH))
         cost_reads.extend(await self.hass.async_add_executor_job(self.api.get_cost_reads, AggregateType.DAY, 24))
         cost_reads.extend(await self.hass.async_add_executor_job(self.api.get_cost_reads, AggregateType.HOUR, 60))
-        return cost_reads
+        return self._deduplicate_cost_reads(cost_reads)
 
     async def _async_get_recent_cost_reads(self) -> list[CostRead]:
         """Get hourly reads within the past 7 days to allow corrections in data from utilities."""
         cost_reads = await self.hass.async_add_executor_job(self.api.get_cost_reads, AggregateType.HOUR, 7)
         return cost_reads
+
+    @staticmethod
+    def _deduplicate_cost_reads(cost_reads: list[CostRead]) -> list[CostRead]:
+        """Remove duplicate cost reads, keeping the finest granularity for each start time.
+
+        When fetching at multiple resolutions (month/day/hour), time periods can overlap.
+        We keep only one entry per start_time, preferring shorter duration (finer granularity).
+        """
+        by_start: dict[float, CostRead] = {}
+        for read in cost_reads:
+            ts = read.start_time.timestamp()
+            existing = by_start.get(ts)
+            if existing is None:
+                by_start[ts] = read
+            else:
+                # Keep the read with the shorter time span (finer granularity)
+                existing_duration = (existing.end_time - existing.start_time).total_seconds()
+                new_duration = (read.end_time - read.start_time).total_seconds()
+                if new_duration < existing_duration:
+                    by_start[ts] = read
+        result = list(by_start.values())
+        result.sort(key=lambda r: r.start_time)
+        return result

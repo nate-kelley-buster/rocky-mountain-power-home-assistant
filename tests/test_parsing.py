@@ -16,6 +16,7 @@ from rmp import (
     CostRead,
     RockyMountainPower,
     RockyMountainPowerUtility,
+    _parse_dollar,
 )
 from tests.conftest import (
     ACCOUNT_INFO_EMPTY_RESPONSE,
@@ -32,6 +33,37 @@ from tests.conftest import (
     MULTI_ACCOUNT_LIST_RESPONSE,
     USER_ME_RESPONSE,
 )
+
+
+class TestParseDollar:
+    """Test the _parse_dollar helper function."""
+
+    def test_simple_amount(self):
+        assert _parse_dollar("$143") == 143.0
+
+    def test_with_cents(self):
+        assert _parse_dollar("$5.99") == 5.99
+
+    def test_with_commas(self):
+        assert _parse_dollar("$1,234.56") == 1234.56
+
+    def test_no_dollar_sign(self):
+        assert _parse_dollar("98.50") == 98.50
+
+    def test_empty_string(self):
+        assert _parse_dollar("") is None
+
+    def test_none_input(self):
+        assert _parse_dollar(None) is None
+
+    def test_whitespace(self):
+        assert _parse_dollar("  $100  ") == 100.0
+
+    def test_zero(self):
+        assert _parse_dollar("$0") is None  # 0.0 is falsy, returns None
+
+    def test_invalid(self):
+        assert _parse_dollar("not a number") is None
 
 
 class TestMonthlyUsageParsing:
@@ -596,3 +628,134 @@ class TestMultiAccountSupport:
 
         accounts = api.get_accounts()
         assert accounts == []
+
+
+class TestSelectorFallback:
+    """Test CSS selector fallback mechanism."""
+
+    def test_first_selector_matches(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+        mock_el = MagicMock()
+        util._page.query_selector.side_effect = [mock_el]
+
+        result = util._query_selector_with_fallback(["sel1", "sel2"])
+        assert result is mock_el
+        util._page.query_selector.assert_called_once_with("sel1")
+
+    def test_fallback_to_second_selector(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+        mock_el = MagicMock()
+        util._page.query_selector.side_effect = [None, mock_el]
+
+        result = util._query_selector_with_fallback(["sel1", "sel2"])
+        assert result is mock_el
+        assert util._page.query_selector.call_count == 2
+
+    def test_no_selector_matches(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+        util._page.query_selector.return_value = None
+
+        result = util._query_selector_with_fallback(["sel1", "sel2"])
+        assert result is None
+
+    def test_query_selector_all_fallback(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+        util._page.query_selector_all.side_effect = [[], [MagicMock(), MagicMock()]]
+
+        result = util._query_selector_all_with_fallback(["sel1", "sel2"])
+        assert len(result) == 2
+
+
+class TestSwitchAccount:
+    """Test account switching logic."""
+
+    def test_switch_account_success(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+
+        mock_picker = MagicMock()
+        mock_option = MagicMock()
+        mock_option.evaluate.return_value = "South Jordan (25656074)"
+
+        with patch.object(util, "_query_selector_with_fallback", return_value=mock_picker):
+            with patch.object(util, "_query_selector_all_with_fallback", return_value=[mock_option]):
+                with patch.object(util, "_wait_for_xhr", return_value=True):
+                    result = util.switch_account("South Jordan")
+
+        assert result is True
+        mock_picker.click.assert_called_once()
+        mock_option.click.assert_called_once()
+
+    def test_switch_account_not_found(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+
+        mock_picker = MagicMock()
+        mock_option = MagicMock()
+        mock_option.evaluate.return_value = "South Jordan (25656074)"
+
+        with patch.object(util, "_query_selector_with_fallback", return_value=mock_picker):
+            with patch.object(util, "_query_selector_all_with_fallback", return_value=[mock_option]):
+                result = util.switch_account("Nonexistent Account")
+
+        assert result is False
+        util._page.keyboard.press.assert_called_once_with("Escape")
+
+    def test_switch_account_no_picker(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+
+        with patch.object(util, "_query_selector_with_fallback", return_value=None):
+            result = util.switch_account("South Jordan")
+
+        assert result is False
+
+    def test_switch_clears_xhrs(self):
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+        util.xhrs = {"https://example.com/old": "data"}
+
+        mock_picker = MagicMock()
+        mock_option = MagicMock()
+        mock_option.evaluate.return_value = "South Jordan"
+
+        with patch.object(util, "_query_selector_with_fallback", return_value=mock_picker):
+            with patch.object(util, "_query_selector_all_with_fallback", return_value=[mock_option]):
+                with patch.object(util, "_wait_for_xhr", return_value=True):
+                    util.switch_account("South Jordan")
+
+        assert util.xhrs == {}
+
+    def test_high_level_switch_delegates(self):
+        api = RockyMountainPower("user", "pass")
+        with patch.object(api.utility, "switch_account", return_value=True) as mock_switch:
+            result = api.switch_account("South Jordan")
+
+        assert result is True
+        mock_switch.assert_called_once_with("South Jordan")
+
+
+class TestSelectUsageOption:
+    """Test the usage dropdown selection with bounds checking."""
+
+    def test_select_usage_option_out_of_range(self):
+        """Should log warning and return without crashing when index is invalid."""
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+
+        # Only 2 dropdowns but we expect at least 4
+        with patch.object(util, "_query_selector_all_with_fallback", return_value=[MagicMock(), MagicMock()]):
+            util._select_usage_option(3)  # Should not crash
+
+    def test_select_usage_no_options(self):
+        """Should handle case where dropdown has no options."""
+        util = RockyMountainPowerUtility()
+        util._page = MagicMock()
+
+        dropdowns = [MagicMock() for _ in range(4)]
+        with patch.object(util, "_query_selector_all_with_fallback", side_effect=[dropdowns, []]):
+            util._select_usage_option(0)  # Should not crash
