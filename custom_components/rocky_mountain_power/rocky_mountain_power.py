@@ -1,7 +1,6 @@
 """Implementation of Rocky Mountain Power API using Playwright."""
 import dataclasses
 import json
-import locale
 import logging
 from datetime import date, datetime, timedelta
 from enum import Enum
@@ -10,8 +9,18 @@ from typing import Any, Optional
 import arrow
 from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext
 
-_LOGGER = logging.getLogger(__file__)
-locale.setlocale(locale.LC_ALL, "en_US")
+_LOGGER = logging.getLogger(__name__)
+
+
+def _parse_dollar(value: str) -> float | None:
+    """Parse a dollar string like '$123.45' or '1,234.56' to float."""
+    if not value:
+        return None
+    cleaned = value.strip().lstrip("$").replace(",", "")
+    try:
+        return float(cleaned) or None
+    except ValueError:
+        return None
 
 
 class CannotConnect(Exception):
@@ -129,7 +138,7 @@ class RockyMountainPowerUtility:
             try:
                 self.xhrs[response.url] = response.text()
             except Exception:
-                pass
+                _LOGGER.debug("Failed to capture XHR response for %s", response.url)
 
     def on_quit(self, *args, **kwargs):
         try:
@@ -140,7 +149,7 @@ class RockyMountainPowerUtility:
             if self._playwright:
                 self._playwright.stop()
         except Exception:
-            pass
+            _LOGGER.debug("Error during browser cleanup", exc_info=True)
         self._page = None
         self._context = None
         self._browser = None
@@ -181,12 +190,19 @@ class RockyMountainPowerUtility:
         except Exception:
             raise InvalidAuth
 
-        # Wait briefly for XHR responses to be captured
-        page.wait_for_timeout(2000)
+        # Wait for critical XHRs to be captured
+        user_me_url = "https://csapps.rockymountainpower.net/api/user/me"
+        account_list_url = "https://csapps.rockymountainpower.net/api/self-service/getAccountList"
+        self._wait_for_xhr(user_me_url, timeout=15000)
+        self._wait_for_xhr(account_list_url, timeout=15000)
 
-        me = json.loads(self.xhrs["https://csapps.rockymountainpower.net/api/user/me"])
+        if user_me_url not in self.xhrs or account_list_url not in self.xhrs:
+            _LOGGER.error("Login succeeded but critical API responses were not captured")
+            raise CannotConnect
+
+        me = json.loads(self.xhrs[user_me_url])
         self.user_id = me["id"]
-        accounts_data = json.loads(self.xhrs["https://csapps.rockymountainpower.net/api/self-service/getAccountList"])
+        accounts_data = json.loads(self.xhrs[account_list_url])
         self.accounts = accounts_data["getAccountListResponseBody"]["accountList"]["webAccount"]
         self.account = self.accounts[0]
         return self.xhrs
@@ -314,7 +330,7 @@ class RockyMountainPowerUtility:
                 start_time = end_time.replace(day=1)
             amount = None
             try:
-                amount = locale.atof(d.get("invoiceAmount", "").strip("$")) or None
+                amount = _parse_dollar(d.get("invoiceAmount", ""))
             except ValueError:
                 pass
             usage.append({
@@ -341,7 +357,7 @@ class RockyMountainPowerUtility:
                 start_time = end_time - timedelta(days=1)
                 amount = None
                 try:
-                    amount = locale.atof(d.get("dollerAmount", "").strip("$")) or None
+                    amount = _parse_dollar(d.get("dollerAmount", ""))
                 except ValueError:
                     pass
                 usage.append({

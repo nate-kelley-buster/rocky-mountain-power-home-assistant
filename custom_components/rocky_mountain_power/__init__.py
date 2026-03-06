@@ -26,6 +26,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator: RockyMountainPowerCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        await hass.async_add_executor_job(coordinator.api.end_session)
 
     return unload_ok
