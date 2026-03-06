@@ -12,6 +12,24 @@ from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, 
 _LOGGER = logging.getLogger(__name__)
 
 
+def _parse_interval_time(read_date: str, read_time: str, tz: str = "America/Denver") -> datetime:
+    """Parse readDate and readTime into a datetime.
+
+    Handles readTime '24:00' as end-of-day (midnight of next day) per
+    common utility conventions, not start-of-day.
+    """
+    if read_time.strip() == "24:00":
+        # 24:00 = end of read_date = midnight of next day
+        base = datetime.fromisoformat(f"{read_date}T00:00:00")
+        end_of_day = base + timedelta(days=1)
+        return arrow.get(end_of_day, tz).datetime
+    time_str = read_time.replace("24", "00")
+    return arrow.get(
+        datetime.fromisoformat(f"{read_date}T{time_str}:00"),
+        tz,
+    ).datetime
+
+
 def _parse_dollar(value: str | None) -> float | None:
     """Parse a dollar string like '$123.45' or '1,234.56' to float."""
     if not value:
@@ -143,6 +161,11 @@ _SELECTORS = {
         "div.mat-form-field-infix",
         ".mat-form-field-infix",
     ],
+    "period_dropdown": [
+        "mat-select[aria-label*='period']",
+        "mat-select[aria-label*='Period']",
+        "[aria-label*='period']",
+    ],
     "usage_option": [
         ".mat-option",
         "mat-option",
@@ -196,9 +219,15 @@ class RockyMountainPowerUtility:
         """Capture XHR JSON responses."""
         if "json" in (response.headers.get("content-type", "")):
             try:
-                self.xhrs[response.url] = response.text()
-            except Exception:
-                _LOGGER.debug("Failed to capture XHR response for %s", response.url)
+                # Try json() first as it might be more robust for JSON responses
+                try:
+                    data = response.json()
+                    self.xhrs[response.url] = json.dumps(data)
+                except Exception:
+                    # Fallback to text()
+                    self.xhrs[response.url] = response.text()
+            except Exception as err:
+                _LOGGER.debug("Failed to capture XHR response for %s: %s", response.url, err)
 
     def on_quit(self, *args, **kwargs) -> None:
         """Close the browser and clean up resources."""
@@ -223,6 +252,28 @@ class RockyMountainPowerUtility:
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
         self._page.on("response", self._on_response)
+
+    def _dismiss_overlays(self) -> None:
+        """Dismiss common overlays/dialogs that block interaction."""
+        page = self._page
+        # Common dismissal buttons
+        selectors = [
+            "button:has-text('Close')",
+            "button:has-text('No thanks')",
+            "button:has-text('Maybe later')",
+            "button:has-text('Remind me later')",
+            "mat-dialog-container button:has-text('Close')",
+            "mat-dialog-container button:has-text('Cancel')",
+        ]
+        for selector in selectors:
+            try:
+                btn = page.query_selector(selector)
+                if btn and btn.is_visible():
+                    _LOGGER.debug("Dismissing overlay with selector: %s", selector)
+                    btn.click()
+                    page.wait_for_timeout(500)
+            except Exception:
+                pass
 
     def login(self, username: str, password: str) -> dict[str, str]:
         """Navigate to the RMP login page, authenticate, and capture account data.
@@ -274,6 +325,9 @@ class RockyMountainPowerUtility:
         self._wait_for_xhr(user_me_url, timeout=15000)
         self._wait_for_xhr(account_list_url, timeout=15000)
 
+        # Dismiss any post-login overlays
+        self._dismiss_overlays()
+
         if user_me_url not in self.xhrs or account_list_url not in self.xhrs:
             _LOGGER.error("Login succeeded but critical API responses were not captured")
             raise CannotConnect
@@ -281,6 +335,11 @@ class RockyMountainPowerUtility:
         me = json.loads(self.xhrs[user_me_url])
         self.user_id = me["id"]
         accounts_data = json.loads(self.xhrs[account_list_url])
+        
+        if "getAccountListResponseBody" not in accounts_data:
+            _LOGGER.error("Unexpected account list response: %s", json.dumps(accounts_data))
+            raise CannotConnect("Account list response missing expected data")
+
         self.accounts = accounts_data["getAccountListResponseBody"]["accountList"]["webAccount"]
         self.account = self.accounts[0]
         return self.xhrs
@@ -382,27 +441,87 @@ class RockyMountainPowerUtility:
             _LOGGER.debug("XHR not captured within %dms: %s", timeout, xhr_url)
         return xhr_url in self.xhrs
 
-    def _select_usage_option(self, option_index: int) -> None:
-        """Click the usage dropdown and select an option by index."""
+    def _select_usage_option(
+        self,
+        labels: list[str] | None = None,
+        fallback_index: int | None = None,
+        prefer_last: bool = False,
+    ) -> None:
+        """Click the period dropdown and select an option by label or index.
+
+        Tries label-based selection first (resilient to option reordering).
+        Falls back to index if no label matches. Uses multiple strategies to
+        find the period dropdown (aria-label, or last mat-form-field-infix).
+        """
         page = self._page
-        dropdowns = self._query_selector_all_with_fallback(_SELECTORS["usage_dropdown"])
-        if len(dropdowns) <= 3:
-            _LOGGER.warning(
-                "Expected at least 4 usage dropdowns, found %d", len(dropdowns)
-            )
+
+        # Strategy 1: Find period dropdown by aria-label
+        period_dropdown = self._query_selector_with_fallback(
+            _SELECTORS.get("period_dropdown", [])
+        )
+        # Strategy 2: Fall back to last usage dropdown (layout varies: 2 or 4+)
+        if not period_dropdown:
+            # Wait a bit for dropdowns to render if we only see the account picker
+            # The account picker usually contains "Active" or digits. The period picker contains "One Day", "Month", etc.
+            for _ in range(40):
+                dropdowns = self._query_selector_all_with_fallback(
+                    _SELECTORS["usage_dropdown"]
+                )
+                if len(dropdowns) >= 2:
+                    # Check if the last one is likely the period picker
+                    last_dropdown = dropdowns[-1]
+                    try:
+                        # Quick check of text content to see if it looks like an account picker
+                        text = last_dropdown.inner_text().lower()
+                        if "active" not in text and "business" not in text:
+                            break
+                    except Exception:
+                        pass
+                page.wait_for_timeout(500)
+            
+            if dropdowns:
+                period_dropdown = dropdowns[-1]
+
+        if not period_dropdown:
+            _LOGGER.warning("No period dropdown found")
             return
-        dropdowns[3].click()
-        page.wait_for_timeout(500)
+
+        # Dismiss overlays before interacting
+        self._dismiss_overlays()
+
+        period_dropdown.click()
+        page.wait_for_timeout(1000)
         options = self._query_selector_all_with_fallback(_SELECTORS["usage_option"])
         if not options:
             _LOGGER.warning("No usage options found in dropdown")
             return
-        # Clamp index to valid range
-        idx = option_index if option_index >= 0 else len(options) + option_index
-        if idx < 0 or idx >= len(options):
-            _LOGGER.warning("Usage option index %d out of range (0-%d)", option_index, len(options) - 1)
-            return
-        options[idx].click()
+
+        # Try label-based selection first
+        if labels:
+            matches = []
+            for i, opt in enumerate(options):
+                try:
+                    text = (opt.evaluate("el => el.textContent?.trim() ?? ''") or "").lower()
+                    _LOGGER.debug("Option %d: '%s'", i, text)
+                    if any(label.lower() in text for label in labels):
+                        matches.append(i)
+                except Exception:
+                    continue
+            if matches:
+                idx = matches[-1] if prefer_last else matches[0]
+                options[idx].click()
+                return
+
+        # Fall back to index
+        if fallback_index is not None:
+            idx = fallback_index if fallback_index >= 0 else len(options) + fallback_index
+            if 0 <= idx < len(options):
+                options[idx].click()
+                return
+
+        _LOGGER.warning(
+            "Could not select usage option: no label match and fallback_index not set"
+        )
 
     def _click_previous_button(self) -> bool:
         """Click the PREVIOUS button to go back one period. Returns False if not found."""
@@ -420,7 +539,10 @@ class RockyMountainPowerUtility:
         """Get monthly usage data from the energy usage page."""
         xhr_url = "https://csapps.rockymountainpower.net/api/account/getUsageHistoryAndGraphDataV1"
         self.goto_energy_usage()
-        self._select_usage_option(0)
+        self._select_usage_option(
+            labels=["One Month", "Month", "Monthly", "1 Month", "12 Months"],
+            fallback_index=0,
+        )
         self._wait_for_xhr(xhr_url)
 
         details = json.loads(self.xhrs.get(xhr_url, "{}"))
@@ -448,7 +570,10 @@ class RockyMountainPowerUtility:
         """Get daily usage data, paginating back the specified number of months."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getUsageForDateRange"
         self.goto_energy_usage()
-        self._select_usage_option(2)
+        self._select_usage_option(
+            labels=["One Day", "Daily"],
+            fallback_index=2,
+        )
         self._wait_for_xhr(xhr_url)
 
         usage: list[dict] = []
@@ -482,7 +607,11 @@ class RockyMountainPowerUtility:
         """Get interval usage data (hourly or 15-minute), paginating back the specified number of days."""
         xhr_url = "https://csapps.rockymountainpower.net/api/energy-usage/getIntervalUsageForDate"
         self.goto_energy_usage()
-        self._select_usage_option(-1)
+        self._select_usage_option(
+            labels=["One Day", "Hourly", "Interval"],
+            fallback_index=-1,
+            prefer_last=True,
+        )
         self._wait_for_xhr(xhr_url)
 
         usage: list[dict] = []
@@ -498,10 +627,9 @@ class RockyMountainPowerUtility:
             )
             interval = self._detect_interval(entries)
             for d in entries:
-                end_time = arrow.get(
-                    datetime.fromisoformat(f"{d['readDate']}T{d['readTime'].replace('24', '00')}:00"),
-                    self.TZ,
-                ).datetime
+                end_time = _parse_interval_time(
+                    d["readDate"], d["readTime"], self.TZ
+                )
                 start_time = end_time - interval
                 usage.append({
                     "startTime": start_time,
@@ -529,12 +657,9 @@ class RockyMountainPowerUtility:
         if len(entries) < 2:
             return timedelta(hours=1)
 
-        def _parse_entry_time(entry: dict) -> datetime:
-            time_str = entry["readTime"].replace("24", "00")
-            return datetime.fromisoformat(f"{entry['readDate']}T{time_str}:00")
-
-        t1 = _parse_entry_time(entries[0])
-        t2 = _parse_entry_time(entries[1])
+        tz = RockyMountainPowerUtility.TZ
+        t1 = _parse_interval_time(entries[0]["readDate"], entries[0]["readTime"], tz)
+        t2 = _parse_interval_time(entries[1]["readDate"], entries[1]["readTime"], tz)
         diff = t2 - t1
 
         if diff.total_seconds() > 0:

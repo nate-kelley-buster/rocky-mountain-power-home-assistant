@@ -17,6 +17,7 @@ from rmp import (
     RockyMountainPower,
     RockyMountainPowerUtility,
     _parse_dollar,
+    _parse_interval_time,
 )
 from tests.conftest import (
     ACCOUNT_INFO_EMPTY_RESPONSE,
@@ -66,6 +67,35 @@ class TestParseDollar:
 
     def test_invalid(self):
         assert _parse_dollar("not a number") is None
+
+
+class TestParseIntervalTime:
+    """Test _parse_interval_time for readDate/readTime parsing, including 24:00."""
+
+    def test_normal_time(self):
+        result = _parse_interval_time("2023-11-22", "01:30", "America/Denver")
+        assert result.hour == 1
+        assert result.minute == 30
+        assert result.day == 22
+
+    def test_24_00_is_midnight_next_day(self):
+        """24:00 = end of day = 00:00 next day per utility convention."""
+        result = _parse_interval_time("2023-11-22", "24:00", "America/Denver")
+        assert result.hour == 0
+        assert result.minute == 0
+        assert result.day == 23
+        assert result.month == 11
+
+    def test_24_00_with_whitespace(self):
+        result = _parse_interval_time("2023-11-22", "  24:00  ", "America/Denver")
+        assert result.day == 23
+        assert result.hour == 0
+
+    def test_regular_midnight(self):
+        """00:00 on a date is start of that day (not 24:00)."""
+        result = _parse_interval_time("2023-11-22", "00:00", "America/Denver")
+        assert result.day == 22
+        assert result.hour == 0
 
 
 class TestMonthlyUsageParsing:
@@ -862,19 +892,24 @@ class TestSelectUsageOption:
     """Test the usage dropdown selection with bounds checking."""
 
     def test_select_usage_option_out_of_range(self):
-        """Should log warning and return without crashing when index is invalid."""
+        """Should log warning and return without crashing when fallback index is invalid."""
         util = RockyMountainPowerUtility()
         util._page = MagicMock()
 
-        # Only 2 dropdowns but we expect at least 4
-        with patch.object(util, "_query_selector_all_with_fallback", return_value=[MagicMock(), MagicMock()]):
-            util._select_usage_option(3)  # Should not crash
+        dropdowns = [MagicMock(), MagicMock()]
+        mock_options = [MagicMock() for _ in range(2)]
+        with patch.object(util, "_query_selector_with_fallback", return_value=None):
+            with patch.object(
+                util, "_query_selector_all_with_fallback", side_effect=[dropdowns, mock_options]
+            ):
+                util._select_usage_option(fallback_index=99)  # Out of range, should not crash
 
     def test_select_usage_no_options(self):
         """Should handle case where dropdown has no options."""
         util = RockyMountainPowerUtility()
         util._page = MagicMock()
 
-        dropdowns = [MagicMock() for _ in range(4)]
-        with patch.object(util, "_query_selector_all_with_fallback", side_effect=[dropdowns, []]):
-            util._select_usage_option(0)  # Should not crash
+        dropdowns = [MagicMock() for _ in range(2)]
+        with patch.object(util, "_query_selector_with_fallback", return_value=None):
+            with patch.object(util, "_query_selector_all_with_fallback", side_effect=[dropdowns, []]):
+                util._select_usage_option(fallback_index=0)  # Should not crash

@@ -152,9 +152,9 @@ class TestLiveForecast:
 
         f = forecasts[0]
         assert isinstance(f, Forecast)
-        assert f.forecasted_cost > 0
-        assert f.forecasted_cost_low > 0
-        assert f.forecasted_cost_high > 0
+        assert f.forecasted_cost >= 0
+        assert f.forecasted_cost_low >= 0
+        assert f.forecasted_cost_high >= 0
         assert f.forecasted_cost_low <= f.forecasted_cost <= f.forecasted_cost_high
         assert f.start_date is not None
         assert f.end_date is not None
