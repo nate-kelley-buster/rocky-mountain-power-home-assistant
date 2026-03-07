@@ -9,6 +9,6 @@
   "documentation": "https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant",
   "issue_tracker": "https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/issues",
   "iot_class": "cloud_polling",
-  "loggers": ["rocky_mountain_power"],
-  "requirements": ["playwright==1.49.1", "arrow>=1.3.0"]
+  "loggers": ["custom_components.rocky_mountain_power"],
+  "requirements": ["arrow>=1.3.0"]
 }

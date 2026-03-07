@@ -8,15 +8,14 @@ Run with: pytest tests/test_live.py -v -s
 """
 import pytest
 
-from rmp import (
+from custom_components.rocky_mountain_power.client import RockyMountainPower
+from custom_components.rocky_mountain_power.exceptions import CannotConnect, InvalidAuth
+from custom_components.rocky_mountain_power.models import (
     AccountInfo,
     AggregateType,
     BillingInfo,
-    CannotConnect,
     CostRead,
     Forecast,
-    InvalidAuth,
-    RockyMountainPower,
 )
 
 

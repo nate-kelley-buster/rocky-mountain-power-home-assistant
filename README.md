@@ -1,309 +1,245 @@
 # Rocky Mountain Power for Home Assistant
 
 [![GitHub Release][releases-shield]][releases]
-[![GitHub Activity][commits-shield]][commits]
-[![License][license-shield]](LICENSE)
 [![Tests][tests-shield]][tests]
 [![hacs][hacsbadge]][hacs]
-![Project Maintenance][maintenance-shield]
-[![Community Forum][forum-shield]][forum]
+[![License][license-shield]](LICENSE)
 
-Bring your Rocky Mountain Power billing and usage data into Home Assistant.
+Bring your Rocky Mountain Power billing, forecast, and usage data into Home Assistant.
 
-This custom integration logs into the Rocky Mountain Power customer portal, pulls your account and usage data, and exposes it in Home Assistant sensors and Energy Dashboard statistics.
+This project has two parts:
 
-## Quick Start
+1. A **Home Assistant custom integration** that creates sensors and imports energy statistics.
+2. A **Playwright sidecar** container that scrapes the Rocky Mountain Power portal on behalf of Home Assistant.
 
-If you want the shortest path to a successful install:
+The sidecar exists because the official Home Assistant Docker image is Alpine-based and cannot run Playwright/Chromium directly.
 
-1. Disable Rocky Mountain Power MFA / 2FA.
-2. Install this integration with HACS.
-3. Restart Home Assistant.
-4. Add the integration in `Settings` -> `Devices & Services`.
-5. If login fails, verify that the Home Assistant environment can run Playwright + Chromium.
-6. Add the imported statistics to the Energy Dashboard.
+```mermaid
+flowchart LR
+    HA[Home Assistant] -->|"HTTP"| SC[rmp-sidecar]
+    SC -->|"Playwright + Chromium"| RMP[Rocky Mountain Power Portal]
+    HA --> E[Energy Dashboard + Sensors]
+```
+
+## Prerequisites
+
+- Docker and Docker Compose on the host machine.
+- A Rocky Mountain Power account with **MFA / 2FA disabled** (browser automation cannot complete MFA prompts).
+
+## Setup
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant.git
+cd rocky-mountain-power-home-assistant
+```
+
+### 2. Create a `.env` file
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set a secure API token:
+
+```env
+RMP_SIDECAR_API_TOKEN=your-random-secret-here
+```
+
+Generate one with:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+### 3. Start the sidecar
+
+```bash
+docker compose up -d --build
+```
+
+Verify it is healthy:
+
+```bash
+docker compose ps
+curl http://localhost:8080/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+### 4. Install the Home Assistant integration
+
+**Option A -- HACS (recommended)**
+
+[![Open HACS repository][hacs-badge-img]][hacs-repo-link]
+
+1. Open HACS in Home Assistant.
+2. Menu (top-right) -> Custom repositories.
+3. Add `https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant` as an **Integration**.
+4. Install **Rocky Mountain Power**.
+5. Restart Home Assistant.
+
+**Option B -- Manual**
+
+Copy `custom_components/rocky_mountain_power/` into your Home Assistant config directory:
+
+```
+<ha-config>/custom_components/rocky_mountain_power/
+```
+
+Restart Home Assistant.
+
+### 5. Configure the integration
+
+1. Go to **Settings -> Devices & Services -> Add Integration**.
+2. Search for **Rocky Mountain Power**.
+3. Enter:
+   - Rocky Mountain Power username
+   - Rocky Mountain Power password
+   - Sidecar base URL (see [Networking](#networking) below)
+   - Sidecar API token (the value from your `.env`)
+
+## Networking
+
+Home Assistant must be able to reach the sidecar over HTTP.
+
+| Setup | Sidecar URL to enter |
+|-------|---------------------|
+| HA and sidecar on the same Docker network | `http://rmp-sidecar:8080` |
+| HA using `network_mode: host` with sidecar port published | `http://localhost:8080` |
+| HA on a different host | `http://<sidecar-host-ip>:8080` |
+
+If HA runs with `network_mode: host` (common), and the sidecar publishes port 8080 on the same machine, `http://localhost:8080` works.
 
 ## What You Get
 
-- Current bill forecast sensors
-- Current balance, due date, past due amount, and payment history sensors
-- Historical electricity usage and cost data
-- Energy Dashboard statistics for consumption and cost
-- Multi-account support
-- Automatic interval detection for accounts that report hourly or 15-minute data
-- Configurable polling interval with a default of 12 hours
-
-## Before You Install
-
-Please read these first. They are the most common setup blockers.
-
-### 1. Multi-factor authentication must be disabled
-
-This integration uses browser automation to sign in to your Rocky Mountain Power account. At the moment, Rocky Mountain Power MFA / 2FA must be turned off for login to succeed.
-
-In the Rocky Mountain Power portal, disable multi-factor authentication before setting up the integration.
-
-### 2. This integration uses Playwright and Chromium
-
-The integration depends on [Playwright](https://playwright.dev/python/) and a Chromium browser installed in the environment where Home Assistant is running.
-
-HACS installs the integration files. It does not guarantee that the Home Assistant runtime can launch Chromium successfully. That part depends on how your Home Assistant instance is hosted.
-
-### 3. Home Assistant OS users should read this carefully
-
-If you are running Home Assistant OS, this integration may require extra work or may not be a good fit for your setup, because Playwright/Chromium support is more constrained there than on a normal Linux or container-based install.
-
-If you are running Home Assistant Container, Home Assistant Core in a Python environment, or another Linux-based install where you control system dependencies, setup is usually much easier.
-
-## Environment Fit
-
-Best fit environments:
-
-- Home Assistant Container on a Linux host you control
-- Home Assistant Core in a Python virtual environment
-- Other Linux installs where Chromium and required libraries can be installed
-
-Potentially difficult environments:
-
-- Home Assistant OS
-- Minimal containers without Chromium dependencies
-
-If Chromium cannot start in your Home Assistant environment, the integration will not be able to log in.
-
-## Installation
-
-### Option 1: Install with HACS
-
-This is the easiest way for most users.
-
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=nate-kelley-buster&repository=rocky-mountain-power-home-assistant&category=integration)
-
-### HACS install steps
-
-1. Open HACS in Home Assistant.
-2. Open the menu in the top-right corner.
-3. Choose `Custom repositories`.
-4. Add this repository URL:
-
-```text
-https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant
-```
-
-5. Set the category to `Integration`.
-6. Click `Add`.
-7. Find `Rocky Mountain Power` in HACS and click `Download`.
-8. Restart Home Assistant.
-
-### Option 2: Manual install
-
-Use this if you do not use HACS.
-
-### Manual install steps
-
-1. Open your Home Assistant configuration directory.
-2. Create a `custom_components` folder if it does not already exist.
-3. Inside `custom_components`, create a folder named `rocky_mountain_power`.
-4. Copy all files from this repository's `custom_components/rocky_mountain_power` directory into your Home Assistant `custom_components/rocky_mountain_power` directory.
-5. Restart Home Assistant.
-
-Your final path should look like this:
-
-```text
-<config>/custom_components/rocky_mountain_power/
-```
-
-## Playwright / Chromium Setup
-
-After the integration files are installed, the Home Assistant runtime still needs Playwright's browser runtime available.
-
-In a Python-based environment, the usual commands are:
-
-```bash
-pip install playwright
-python -m playwright install --with-deps chromium
-```
-
-If you run Home Assistant in a container, your container image must include the system libraries Chromium needs. If you are using Home Assistant OS, this is the part most likely to require extra work.
-
-Common missing pieces in broken environments include:
-
-- browser dependencies
-- font packages
-- shared libraries required by Chromium
-- sandbox restrictions in highly locked-down containers
-
-## Add the Integration
-
-Once the files are installed and Home Assistant has restarted:
-
-[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rocky_mountain_power)
-
-### UI setup steps
-
-1. Open Home Assistant.
-2. Go to `Settings` -> `Devices & Services`.
-3. Click `Add Integration`.
-4. Search for `Rocky Mountain Power`.
-5. Enter your Rocky Mountain Power username.
-6. Enter your Rocky Mountain Power password.
-7. Finish the setup flow.
-
-There is no YAML configuration required.
-
-## First Successful Run
-
-After setup completes successfully, Home Assistant will:
-
-- create Rocky Mountain Power sensors
-- start fetching billing and forecast data
-- import historical usage and cost statistics for Energy Dashboard use
-
-The integration supports multiple accounts on the same Rocky Mountain Power login.
-
-If you do not see Energy statistics immediately, give Home Assistant a little time to register and populate them.
-
-## Configure Update Frequency
-
-The integration defaults to updating every 12 hours. You can change that later from the integration options.
-
-You can change that in Home Assistant:
-
-1. Go to `Settings` -> `Devices & Services`.
-2. Open the `Rocky Mountain Power` integration.
-3. Click `Configure`.
-4. Choose an update interval.
-
-Available update interval options:
-
-- 1 hour
-- 2 hours
-- 4 hours
-- 6 hours
-- 8 hours
-- 12 hours
-- 24 hours
-
-Lower values fetch new data more often, but they also put more load on the Rocky Mountain Power site.
-
-## Data Imported by the Integration
-
 ### Sensors
 
-The integration creates sensors for:
-
-- Current bill forecasted cost
-- Current bill forecasted cost low
-- Current bill forecasted cost high
+- Current bill forecasted cost (and low/high estimates)
 - Current balance due
 - Payment due date
 - Past due amount
-- Last payment amount
-- Last payment date
+- Last payment amount and date
 - Next statement date
 
-### Energy statistics
+### Energy Dashboard statistics
 
-The integration also imports historical data into Home Assistant statistics so it can be used in the Energy Dashboard.
+- Monthly, daily, and interval (hourly or 15-minute) usage and cost history
+- Automatic interval detection per meter
 
-This includes:
+### Options
 
-- monthly usage and cost history
-- daily usage and cost history
-- interval usage data for supported accounts
+The default polling interval is 12 hours. Change it in **Settings -> Devices & Services -> Rocky Mountain Power -> Configure**.
 
-Some Rocky Mountain Power accounts expose one-day interval data as hourly readings. Others expose it in 15-minute intervals. This integration automatically detects the interval length from the source data.
-
-## Add It to the Energy Dashboard
-
-To use the imported statistics in Home Assistant Energy:
-
-1. Go to `Settings` -> `Dashboards` -> `Energy`.
-2. Under electricity consumption, choose `Add consumption`.
-3. Select the Rocky Mountain Power consumption statistic for the account you want.
-4. Optionally add the matching cost statistic if you want cost tracking in Energy as well.
+Available intervals: 1h, 2h, 4h, 6h, 8h, 12h, 24h.
 
 ## Troubleshooting
 
-### Login fails
+**Sidecar health check fails**
 
-Check these first:
+- Confirm the container is running: `docker compose ps`
+- Check logs: `docker compose logs rmp-sidecar`
+- The first start takes longer while Chromium initializes; the health check has a 60-second start period.
 
-- MFA / 2FA is disabled on your Rocky Mountain Power account
-- your username and password are correct
-- Chromium can actually launch in your Home Assistant environment
-- Home Assistant can reach the Rocky Mountain Power site
+**Home Assistant cannot connect to the sidecar**
 
-### Integration installs but no data appears
+- Verify the URL you entered in the integration config.
+- From inside the HA container, test connectivity: `curl http://<sidecar-url>/health`.
+- Ensure the API token matches exactly.
 
-Possible causes:
+**Login fails (invalid_auth)**
 
-- browser automation is blocked by the environment
-- Rocky Mountain Power changed part of the portal UI
-- the site is temporarily unavailable
-- the account is not exposing the expected usage data yet
+- Confirm MFA / 2FA is disabled on your Rocky Mountain Power account.
+- Verify username and password are correct.
+- Check sidecar logs for details: `docker compose logs rmp-sidecar`.
 
-### Home Assistant says the integration is installed, but setup still fails
+**No data appears after setup**
 
-That usually means the Python package was installed correctly, but the runtime environment still cannot complete browser automation.
+- The first poll may take a few minutes while the sidecar scrapes the portal.
+- Check Home Assistant logs for `rocky_mountain_power` entries.
+- Rocky Mountain Power may temporarily block automated access under high load.
 
-The most common causes are:
+**Forecast values are zero**
 
-- Chromium is missing
-- Chromium dependencies are missing
-- the environment blocks browser startup
-- Rocky Mountain Power login requirements changed
-- MFA is still enabled
+This is normal early in a billing cycle or when Rocky Mountain Power has not populated projected values.
 
-### Some accounts show hourly data and others show 15-minute data
+## Project Structure
 
-That is expected. The portal can return different interval sizes for different accounts/meters. The integration detects the interval from the returned timestamps instead of assuming everything is hourly.
+```
+.
+├── custom_components/rocky_mountain_power/   # HA integration
+│   ├── __init__.py       # HA entry point
+│   ├── client.py         # Sidecar HTTP client + local Playwright bridge
+│   ├── config_flow.py    # HA setup and options UI
+│   ├── const.py          # Constants
+│   ├── coordinator.py    # Data update coordinator
+│   ├── exceptions.py     # Shared exception types
+│   ├── manifest.json     # HA integration metadata
+│   ├── models.py         # Data models
+│   ├── scraper.py        # Playwright browser automation
+│   ├── sensor.py         # HA sensor entities
+│   ├── strings.json      # UI strings
+│   └── translations/     # Localization
+├── sidecar/
+│   ├── app.py            # FastAPI sidecar service
+│   ├── Dockerfile
+│   └── requirements.txt
+├── tests/
+├── docker-compose.yml    # Production compose (sidecar only)
+├── .env.example          # Template for required env vars
+├── hacs.json             # HACS repository metadata
+└── README.md
+```
 
-### Forecast values may sometimes be zero
+## Development
 
-This can happen, especially early in a billing cycle or when Rocky Mountain Power has not populated projected cost values yet.
+For local development, the client supports direct Playwright usage without the sidecar. Install dev dependencies and Playwright:
 
-### Re-authentication
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m playwright install --with-deps chromium
+```
 
-If Rocky Mountain Power invalidates your session or credentials change, Home Assistant may prompt you to re-authenticate through the integration UI.
+Run tests:
 
-## Known Limitations
+```bash
+pytest tests/ -v --ignore=tests/test_live.py
+```
 
-- Requires Rocky Mountain Power MFA / 2FA to be disabled
-- Requires Playwright and Chromium support in the Home Assistant runtime environment
-- Depends on Rocky Mountain Power's website structure and API behavior
-- Live portal changes on Rocky Mountain Power's side can temporarily break data retrieval until the integration is updated
+Live tests (require credentials in `.env`):
+
+```bash
+pytest tests/test_live.py -v -s --timeout=300
+```
 
 ## Credits
 
-This project is based on [rocky-mountain-power](https://github.com/jaredhobbs/rocky-mountain-power) by [Jared Hobbs](https://github.com/jaredhobbs). That work provided the foundation that made this Home Assistant integration possible.
+Based on [rocky-mountain-power](https://github.com/jaredhobbs/rocky-mountain-power) by [Jared Hobbs](https://github.com/jaredhobbs).
 
 ## Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. When reporting bugs, include:
 
-If you run into a problem, please include:
-
-- your Home Assistant installation type
-- how you installed this integration
-- any relevant Home Assistant logs
-- whether Chromium / Playwright is available in your runtime
+- Home Assistant installation type
+- Sidecar logs (`docker compose logs rmp-sidecar`)
+- Relevant Home Assistant logs
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
 
-***
-
-[rmp]: https://www.rockymountainpower.net
-[commits-shield]: https://img.shields.io/github/commit-activity/y/nate-kelley-buster/rocky-mountain-power-home-assistant.svg?style=for-the-badge
-[commits]: https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/commits/main
-[hacs]: https://github.com/custom-components/hacs
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
-[license-shield]: https://img.shields.io/github/license/nate-kelley-buster/rocky-mountain-power-home-assistant.svg?style=for-the-badge
-[maintenance-shield]: https://img.shields.io/badge/maintainer-nate--kelley--buster-blue.svg?style=for-the-badge
 [releases-shield]: https://img.shields.io/github/release/nate-kelley-buster/rocky-mountain-power-home-assistant.svg?style=for-the-badge
 [releases]: https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/releases
-[forum-shield]: https://img.shields.io/badge/community-forum-brightgreen.svg?style=for-the-badge
-[forum]: https://community.home-assistant.io/
 [tests-shield]: https://img.shields.io/github/actions/workflow/status/nate-kelley-buster/rocky-mountain-power-home-assistant/tests.yml?style=for-the-badge&label=tests
 [tests]: https://github.com/nate-kelley-buster/rocky-mountain-power-home-assistant/actions/workflows/tests.yml
+[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
+[hacs]: https://github.com/custom-components/hacs
+[license-shield]: https://img.shields.io/github/license/nate-kelley-buster/rocky-mountain-power-home-assistant.svg?style=for-the-badge
+[hacs-badge-img]: https://my.home-assistant.io/badges/hacs_repository.svg
+[hacs-repo-link]: https://my.home-assistant.io/redirect/hacs_repository/?owner=nate-kelley-buster&repository=rocky-mountain-power-home-assistant&category=integration

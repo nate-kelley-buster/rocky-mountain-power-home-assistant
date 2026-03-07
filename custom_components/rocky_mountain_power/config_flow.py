@@ -15,12 +15,16 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 
-from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
-from .rocky_mountain_power import (
-    CannotConnect,
-    InvalidAuth,
-    RockyMountainPower,
+from .const import (
+    CONF_SIDECAR_API_TOKEN,
+    CONF_SIDECAR_BASE_URL,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_SIDECAR_BASE_URL,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
 )
+from .client import RockyMountainPower
+from .exceptions import CannotConnect, InvalidAuth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +32,10 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Required(
+            CONF_SIDECAR_BASE_URL, default=DEFAULT_SIDECAR_BASE_URL
+        ): str,
+        vol.Optional(CONF_SIDECAR_API_TOKEN, default=""): str,
     }
 )
 
@@ -37,6 +45,8 @@ def _validate_login(login_data: dict[str, str]) -> dict[str, str]:
     api = RockyMountainPower(
         login_data[CONF_USERNAME],
         login_data[CONF_PASSWORD],
+        login_data[CONF_SIDECAR_BASE_URL],
+        login_data.get(CONF_SIDECAR_API_TOKEN) or None,
     )
     errors: dict[str, str] = {}
     try:
@@ -98,6 +108,18 @@ class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_USERNAME): self._get_reauth_entry().data[CONF_USERNAME],
                     vol.Required(CONF_PASSWORD): str,
+                    vol.Required(
+                        CONF_SIDECAR_BASE_URL,
+                        default=self._get_reauth_entry().data.get(
+                            CONF_SIDECAR_BASE_URL, DEFAULT_SIDECAR_BASE_URL
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_SIDECAR_API_TOKEN,
+                        default=self._get_reauth_entry().data.get(
+                            CONF_SIDECAR_API_TOKEN, ""
+                        ),
+                    ): str,
                 }
             ),
         )
@@ -121,6 +143,16 @@ class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_USERNAME): reauth_entry.data[CONF_USERNAME],
                     vol.Required(CONF_PASSWORD): str,
+                    vol.Required(
+                        CONF_SIDECAR_BASE_URL,
+                        default=reauth_entry.data.get(
+                            CONF_SIDECAR_BASE_URL, DEFAULT_SIDECAR_BASE_URL
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_SIDECAR_API_TOKEN,
+                        default=reauth_entry.data.get(CONF_SIDECAR_API_TOKEN, ""),
+                    ): str,
                 }
             ),
             errors=errors,

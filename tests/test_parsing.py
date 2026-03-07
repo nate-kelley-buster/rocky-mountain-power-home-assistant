@@ -9,12 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rmp import (
+from custom_components.rocky_mountain_power.client import RockyMountainPower
+from custom_components.rocky_mountain_power.models import (
     AccountInfo,
     AggregateType,
     BillingInfo,
     CostRead,
-    RockyMountainPower,
+)
+from custom_components.rocky_mountain_power.scraper import (
     RockyMountainPowerUtility,
     _parse_dollar,
     _parse_interval_time,

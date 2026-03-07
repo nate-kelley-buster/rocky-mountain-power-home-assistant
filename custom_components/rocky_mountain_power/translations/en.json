@@ -6,11 +6,15 @@
         "description": "Make sure multi-factor authentication has been disabled.",
         "data": {
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "sidecar_base_url": "Sidecar base URL",
+          "sidecar_api_token": "Sidecar API token"
         },
         "data_description": {
           "username": "Your Rocky Mountain Power account email.",
-          "password": "Your Rocky Mountain Power account password."
+          "password": "Your Rocky Mountain Power account password.",
+          "sidecar_base_url": "Base URL for the Rocky Mountain Power Playwright sidecar service.",
+          "sidecar_api_token": "Optional API token for the sidecar service."
         }
       },
       "reauth_confirm": {
@@ -18,7 +22,9 @@
         "description": "Your credentials have expired. Please re-enter your password.",
         "data": {
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "sidecar_base_url": "Sidecar base URL",
+          "sidecar_api_token": "Sidecar API token"
         }
       }
     },

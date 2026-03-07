@@ -1,25 +1,10 @@
 """Shared fixtures for Rocky Mountain Power tests."""
-import importlib.util
 import os
-import sys
 
 import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# Load rocky_mountain_power.py directly to avoid importing the HA-dependent __init__.py
-_MODULE_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "..",
-    "custom_components",
-    "rocky_mountain_power",
-    "rocky_mountain_power.py",
-)
-_spec = importlib.util.spec_from_file_location("rmp", os.path.abspath(_MODULE_PATH))
-rmp = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(rmp)
-sys.modules["rmp"] = rmp
 
 
 @pytest.fixture(autouse=True)

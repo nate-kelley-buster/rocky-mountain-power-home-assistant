@@ -1,14 +1,13 @@
 """Tests for data classes and enums."""
 from datetime import date, datetime
 
-from rmp import (
+from custom_components.rocky_mountain_power.exceptions import CannotConnect, InvalidAuth
+from custom_components.rocky_mountain_power.models import (
     Account,
     AggregateType,
-    CannotConnect,
     CostRead,
     Customer,
     Forecast,
-    InvalidAuth,
     UsageRead,
 )
 

@@ -22,14 +22,17 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util.unit_conversion import EnergyConverter
 
-from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
-from .rocky_mountain_power import (
-    AggregateType,
-    CannotConnect,
-    CostRead,
-    InvalidAuth,
-    RockyMountainPower,
+from .const import (
+    CONF_SIDECAR_API_TOKEN,
+    CONF_SIDECAR_BASE_URL,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_SIDECAR_BASE_URL,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
 )
+from .client import RockyMountainPower
+from .exceptions import CannotConnect, InvalidAuth
+from .models import AggregateType, CostRead
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +64,8 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
         self.api = RockyMountainPower(
             config_entry.data[CONF_USERNAME],
             config_entry.data[CONF_PASSWORD],
+            config_entry.data.get(CONF_SIDECAR_BASE_URL, DEFAULT_SIDECAR_BASE_URL),
+            config_entry.data.get(CONF_SIDECAR_API_TOKEN) or None,
         )
 
         # Force periodic updates even when no sensors are registered (e.g.,
@@ -101,15 +106,12 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
                 nickname = acct.nickname or acct.address or acct_num
                 _LOGGER.debug("Fetching data for account %s (%s)", acct_num, nickname)
 
-                switched = await self.hass.async_add_executor_job(self.api.switch_account, nickname)
+                switched = await self.hass.async_add_executor_job(
+                    self.api.switch_account, acct_num
+                )
                 if not switched:
                     _LOGGER.warning("Failed to switch to account %s (%s), skipping", acct_num, nickname)
                     continue
-
-                self.api.account = next(
-                    (a for a in self.api.utility.accounts if a["accountNumber"] == acct_num),
-                    self.api.account,
-                )
 
                 result[acct_num] = {
                     "nickname": nickname,

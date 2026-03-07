@@ -1,13 +1,32 @@
-"""Implementation of Rocky Mountain Power API using Playwright."""
-import dataclasses
+"""Playwright browser automation for the Rocky Mountain Power website."""
+from __future__ import annotations
+
 import json
 import logging
-from datetime import date, datetime, timedelta
-from enum import Enum
+from datetime import datetime, timedelta
 from typing import Any
 
 import arrow
-from playwright.sync_api import sync_playwright, Browser, Page, BrowserContext, TimeoutError as PlaywrightTimeout
+
+from .exceptions import CannotConnect, InvalidAuth
+
+try:
+    from playwright.sync_api import (
+        Browser,
+        BrowserContext,
+        Page,
+        TimeoutError as PlaywrightTimeout,
+        sync_playwright,
+    )
+except ImportError:
+    Browser = Any
+    BrowserContext = Any
+    Page = Any
+    sync_playwright = None
+
+    class PlaywrightTimeout(Exception):
+        """Fallback timeout error when Playwright is unavailable."""
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +38,6 @@ def _parse_interval_time(read_date: str, read_time: str, tz: str = "America/Denv
     common utility conventions, not start-of-day.
     """
     if read_time.strip() == "24:00":
-        # 24:00 = end of read_date = midnight of next day
         base = datetime.fromisoformat(f"{read_date}T00:00:00")
         end_of_day = base + timedelta(days=1)
         return arrow.get(end_of_day, tz).datetime
@@ -43,98 +61,14 @@ def _parse_dollar(value: str | None) -> float | None:
         return None
 
 
-class CannotConnect(Exception):
-    """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(Exception):
-    """Error to indicate there is invalid auth."""
-
-
-class AggregateType(Enum):
-    """How to aggregate historical data."""
-
-    MONTH = "month"
-    DAY = "day"
-    HOUR = "hour"
-
-    def __str__(self) -> str:
-        """Return the value of the enum."""
-        return self.value
-
-
-@dataclasses.dataclass
-class Customer:
-    """Data about a customer."""
-
-    uuid: str
-
-
-@dataclasses.dataclass
-class Account:
-    """Data about an account."""
-
-    customer: Customer
-    uuid: str
-    utility_account_id: str
-
-
-@dataclasses.dataclass
-class AccountInfo:
-    """Extended account info from getAccountList."""
-
-    account_number: str
-    address: str
-    nickname: str
-    status: str
-    is_business: bool
-    customer_idn: int
-
-
-@dataclasses.dataclass
-class Forecast:
-    """Forecast data for an account."""
-
-    account: Account
-    start_date: date
-    end_date: date
-    current_date: date
-    forecasted_cost: float
-    forecasted_cost_low: float
-    forecasted_cost_high: float
-
-
-@dataclasses.dataclass
-class BillingInfo:
-    """Billing and payment info for an account."""
-
-    account: Account
-    current_balance: float
-    due_date: date | None
-    past_due_amount: float
-    last_payment_amount: float
-    last_payment_date: date | None
-    next_statement_date: date | None
-    enrolled_payment_program: str | None
-
-
-@dataclasses.dataclass
-class CostRead:
-    """A read from the meter that has both consumption and cost data."""
-
-    start_time: datetime
-    end_time: datetime
-    consumption: float  # taken from value field, in KWH
-    provided_cost: float  # in $
-
-
-@dataclasses.dataclass
-class UsageRead:
-    """A read from the meter that has consumption data."""
-
-    start_time: datetime
-    end_time: datetime
-    consumption: float  # taken from consumption.value field, in KWH
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 datetime string."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 # CSS selectors with fallbacks for resilience against RMP site redesigns.
@@ -219,12 +153,10 @@ class RockyMountainPowerUtility:
         """Capture XHR JSON responses."""
         if "json" in (response.headers.get("content-type", "")):
             try:
-                # Try json() first as it might be more robust for JSON responses
                 try:
                     data = response.json()
                     self.xhrs[response.url] = json.dumps(data)
                 except Exception:
-                    # Fallback to text()
                     self.xhrs[response.url] = response.text()
             except Exception as err:
                 _LOGGER.debug("Failed to capture XHR response for %s: %s", response.url, err)
@@ -247,6 +179,11 @@ class RockyMountainPowerUtility:
 
     def init_browser(self) -> None:
         """Launch a headless Chromium browser."""
+        if sync_playwright is None:
+            raise CannotConnect(
+                "Playwright is not installed in this environment. "
+                "Use the Rocky Mountain Power sidecar service instead."
+            )
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         self._context = self._browser.new_context()
@@ -256,7 +193,6 @@ class RockyMountainPowerUtility:
     def _dismiss_overlays(self) -> None:
         """Dismiss common overlays/dialogs that block interaction."""
         page = self._page
-        # Common dismissal buttons
         selectors = [
             "button:has-text('Close')",
             "button:has-text('No thanks')",
@@ -276,10 +212,7 @@ class RockyMountainPowerUtility:
                 pass
 
     def login(self, username: str, password: str) -> dict[str, str]:
-        """Navigate to the RMP login page, authenticate, and capture account data.
-
-        Returns the captured XHR responses dict.
-        """
+        """Navigate to the RMP login page, authenticate, and capture account data."""
         self.init_browser()
         page = self._page
 
@@ -290,12 +223,10 @@ class RockyMountainPowerUtility:
             _LOGGER.error("Timed out waiting for login page to load")
             raise CannotConnect from err
 
-        # Dismiss cookie banner if present
         cookie_btn = self._query_selector_with_fallback(_SELECTORS["cookie_banner_btn"])
         if cookie_btn and cookie_btn.is_visible():
             cookie_btn.click()
 
-        # Wait for and switch to login iframe
         iframe_el = None
         for selector in _SELECTORS["login_iframe"]:
             try:
@@ -319,13 +250,11 @@ class RockyMountainPowerUtility:
             _LOGGER.error("Login failed — did not reach 'My account' page")
             raise InvalidAuth from err
 
-        # Wait for critical XHRs to be captured
         user_me_url = "https://csapps.rockymountainpower.net/api/user/me"
         account_list_url = "https://csapps.rockymountainpower.net/api/self-service/getAccountList"
         self._wait_for_xhr(user_me_url, timeout=15000)
         self._wait_for_xhr(account_list_url, timeout=15000)
 
-        # Dismiss any post-login overlays
         self._dismiss_overlays()
 
         if user_me_url not in self.xhrs or account_list_url not in self.xhrs:
@@ -335,7 +264,7 @@ class RockyMountainPowerUtility:
         me = json.loads(self.xhrs[user_me_url])
         self.user_id = me["id"]
         accounts_data = json.loads(self.xhrs[account_list_url])
-        
+
         if "getAccountListResponseBody" not in accounts_data:
             _LOGGER.error("Unexpected account list response: %s", json.dumps(accounts_data))
             raise CannotConnect("Account list response missing expected data")
@@ -345,37 +274,26 @@ class RockyMountainPowerUtility:
         return self.xhrs
 
     def switch_account(self, nickname: str) -> bool:
-        """Switch to a different account using the account picker dropdown.
-
-        Args:
-            nickname: The account nickname to switch to (from getAccountList).
-
-        Returns:
-            True if successfully switched, False if account not found.
-        """
+        """Switch to a different account using the account picker dropdown."""
         page = self._page
         picker = self._query_selector_with_fallback(_SELECTORS["account_picker"])
         if not picker:
             _LOGGER.warning("Account picker not found on page")
             return False
 
-        # Open the dropdown
         picker.click()
         page.wait_for_timeout(1000)
 
-        # Find and click the matching option
         options = self._query_selector_all_with_fallback(_SELECTORS["dropdown_option"])
         for opt in options:
             text = opt.evaluate("el => el.textContent.trim()")
             if nickname in text:
                 opt.click()
-                # Wait for account data to reload via XHR
                 acct_info_url = "https://csapps.rockymountainpower.net/api/account/getAccountInfo"
                 self.xhrs.clear()
                 self._wait_for_xhr(acct_info_url, timeout=10000)
                 return True
 
-        # Close dropdown if we didn't find a match
         _LOGGER.warning("Account '%s' not found in picker options", nickname)
         page.keyboard.press("Escape")
         return False
@@ -404,10 +322,9 @@ class RockyMountainPowerUtility:
             raise CannotConnect from err
 
     def get_billing_info(self) -> dict | None:
-        """Get billing info from the account info XHR (captured during login/navigation)."""
+        """Get billing info from the account info XHR."""
         xhr_url = "https://csapps.rockymountainpower.net/api/account/getAccountInfo"
 
-        # The billing page triggers getAccountInfo if we haven't captured it yet
         if xhr_url not in self.xhrs:
             self.goto_billing()
             self._wait_for_xhr(xhr_url, timeout=10000)
@@ -447,38 +364,27 @@ class RockyMountainPowerUtility:
         fallback_index: int | None = None,
         prefer_last: bool = False,
     ) -> None:
-        """Click the period dropdown and select an option by label or index.
-
-        Tries label-based selection first (resilient to option reordering).
-        Falls back to index if no label matches. Uses multiple strategies to
-        find the period dropdown (aria-label, or last mat-form-field-infix).
-        """
+        """Click the period dropdown and select an option by label or index."""
         page = self._page
 
-        # Strategy 1: Find period dropdown by aria-label
         period_dropdown = self._query_selector_with_fallback(
             _SELECTORS.get("period_dropdown", [])
         )
-        # Strategy 2: Fall back to last usage dropdown (layout varies: 2 or 4+)
         if not period_dropdown:
-            # Wait a bit for dropdowns to render if we only see the account picker
-            # The account picker usually contains "Active" or digits. The period picker contains "One Day", "Month", etc.
             for _ in range(40):
                 dropdowns = self._query_selector_all_with_fallback(
                     _SELECTORS["usage_dropdown"]
                 )
                 if len(dropdowns) >= 2:
-                    # Check if the last one is likely the period picker
                     last_dropdown = dropdowns[-1]
                     try:
-                        # Quick check of text content to see if it looks like an account picker
                         text = last_dropdown.inner_text().lower()
                         if "active" not in text and "business" not in text:
                             break
                     except Exception:
                         pass
                 page.wait_for_timeout(500)
-            
+
             if dropdowns:
                 period_dropdown = dropdowns[-1]
 
@@ -486,7 +392,6 @@ class RockyMountainPowerUtility:
             _LOGGER.warning("No period dropdown found")
             return
 
-        # Dismiss overlays before interacting
         self._dismiss_overlays()
 
         period_dropdown.click()
@@ -496,7 +401,6 @@ class RockyMountainPowerUtility:
             _LOGGER.warning("No usage options found in dropdown")
             return
 
-        # Try label-based selection first
         if labels:
             matches = []
             for i, opt in enumerate(options):
@@ -512,7 +416,6 @@ class RockyMountainPowerUtility:
                 options[idx].click()
                 return
 
-        # Fall back to index
         if fallback_index is not None:
             idx = fallback_index if fallback_index >= 0 else len(options) + fallback_index
             if 0 <= idx < len(options):
@@ -524,7 +427,7 @@ class RockyMountainPowerUtility:
         )
 
     def _click_previous_button(self) -> bool:
-        """Click the PREVIOUS button to go back one period. Returns False if not found."""
+        """Click the PREVIOUS button to go back one period."""
         prev_btn = self._query_selector_with_fallback(_SELECTORS["prev_button"])
         if not prev_btn:
             return False
@@ -665,168 +568,3 @@ class RockyMountainPowerUtility:
         if diff.total_seconds() > 0:
             return diff
         return timedelta(hours=1)
-
-
-class RockyMountainPower:
-    """Class that can get historical and forecasted usage/cost from Rocky Mountain Power."""
-
-    def __init__(
-        self,
-        username: str,
-        password: str,
-    ) -> None:
-        """Initialize."""
-        self._username: str = username
-        self._password: str = password
-        self.account: dict = {}
-        self.customer_id: str | None = None
-        self.utility: RockyMountainPowerUtility = RockyMountainPowerUtility()
-
-    def login(self) -> None:
-        """Login to the utility website.
-
-        :raises InvalidAuth: if login information is incorrect
-        :raises CannotConnect: if we receive any HTTP error
-        """
-        self.utility.login(self._username, self._password)
-        if not self.account:
-            self.account = self.utility.account
-        if not self.customer_id:
-            self.customer_id = self.utility.user_id
-
-    def end_session(self) -> None:
-        """Close the browser and clean up resources."""
-        self.utility.on_quit()
-
-    def get_accounts(self) -> list[AccountInfo]:
-        """Get all accounts for the signed in user."""
-        return [
-            AccountInfo(
-                account_number=acct["accountNumber"],
-                address=acct.get("mailingAddressLine1", "").strip(),
-                nickname=acct.get("accountNickname", "").strip(),
-                status=acct.get("status", "Unknown"),
-                is_business=acct.get("isBusiness", False),
-                customer_idn=acct.get("customer", {}).get("idn", 0),
-            )
-            for acct in self.utility.accounts
-        ]
-
-    def get_account(self) -> Account:
-        """Get the active account for the signed in user."""
-        account = self._get_account()
-        return Account(
-            customer=Customer(uuid=self.customer_id),
-            uuid=account["accountNumber"],
-            utility_account_id=self.customer_id,
-        )
-
-    def get_forecast(self) -> list[Forecast]:
-        """Get current and forecasted usage and cost for the current monthly bill."""
-        forecasts: list[Forecast] = []
-        self.utility.get_forecast()
-        if self.utility.forecast:
-            forecast = self.utility.forecast
-            forecasts.append(
-                Forecast(
-                    account=Account(
-                        customer=Customer(uuid=self.customer_id),
-                        uuid=self.account["accountNumber"],
-                        utility_account_id=self.customer_id,
-                    ),
-                    start_date=arrow.get(date.fromisoformat(forecast["startDateForAMIAcctView"]), self.utility.TZ).datetime,
-                    end_date=arrow.get(date.fromisoformat(forecast["endDateForAMIAcctView"]), self.utility.TZ).datetime,
-                    current_date=arrow.get(date.today(), self.utility.TZ).datetime,
-                    forecasted_cost=float(forecast.get("projectedCost", 0)),
-                    forecasted_cost_low=float(forecast.get("projectedCostLow", 0)),
-                    forecasted_cost_high=float(forecast.get("projectedCostHigh", 0)),
-                )
-            )
-        return forecasts
-
-    def get_billing_info(self) -> BillingInfo | None:
-        """Get billing and payment info for the active account."""
-        info = self.utility.get_billing_info()
-        if info is None:
-            return None
-
-        due_date = None
-        if info.get("currentDueAmountDueDate"):
-            try:
-                due_date = date.fromisoformat(info["currentDueAmountDueDate"])
-            except (ValueError, TypeError):
-                pass
-
-        last_payment_date = None
-        if info.get("lastPaymentDate"):
-            try:
-                last_payment_date = date.fromisoformat(info["lastPaymentDate"])
-            except (ValueError, TypeError):
-                pass
-
-        next_statement_date = None
-        if info.get("nextStatementDate"):
-            try:
-                next_statement_date = date.fromisoformat(info["nextStatementDate"])
-            except (ValueError, TypeError):
-                pass
-
-        return BillingInfo(
-            account=Account(
-                customer=Customer(uuid=self.customer_id),
-                uuid=self.account["accountNumber"],
-                utility_account_id=self.customer_id,
-            ),
-            current_balance=float(info.get("totalDueAmount", 0)),
-            due_date=due_date,
-            past_due_amount=float(info.get("pastDueAmount", 0)),
-            last_payment_amount=float(info.get("lastPaymentAmount", 0)),
-            last_payment_date=last_payment_date,
-            next_statement_date=next_statement_date,
-            enrolled_payment_program=info.get("enrolledPaymentProgram"),
-        )
-
-    def switch_account(self, nickname: str) -> bool:
-        """Switch the active account on the RMP site."""
-        return self.utility.switch_account(nickname)
-
-    def _get_account(self) -> dict:
-        """Get account associated with the user, logging in if needed."""
-        if not self.account:
-            self.login()
-            self.account = self.utility.account
-        if not self.account:
-            raise CannotConnect("No account data available after login")
-        return self.account
-
-    def get_cost_reads(
-        self,
-        aggregate_type: AggregateType,
-        period: int | None = 1,
-    ) -> list[CostRead]:
-        """Get usage and cost data aggregated by month/day/hour."""
-        reads = self._get_dated_data(aggregate_type, period=period)
-        reads.sort(key=lambda x: x["startTime"])
-        return [
-            CostRead(
-                start_time=read["startTime"],
-                end_time=read["endTime"],
-                consumption=read["usage"],
-                provided_cost=read["amount"] or 0,
-            ) for read in reads
-        ]
-
-    def _get_dated_data(
-        self,
-        aggregate_type: AggregateType,
-        period: int | None = 1,
-    ) -> list[dict]:
-        """Dispatch to the correct usage method based on aggregate type."""
-        if aggregate_type == AggregateType.MONTH:
-            return self.utility.get_usage_by_month()
-        elif aggregate_type == AggregateType.DAY:
-            return self.utility.get_usage_by_day(months=period)
-        elif aggregate_type == AggregateType.HOUR:
-            return self.utility.get_usage_by_interval(days=period)
-        else:
-            raise ValueError(f"aggregate_type {aggregate_type} is not valid")

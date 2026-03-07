@@ -9,7 +9,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.rocky_mountain_power.const import (
+    CONF_SIDECAR_API_TOKEN,
+    CONF_SIDECAR_BASE_URL,
     CONF_UPDATE_INTERVAL,
+    DEFAULT_SIDECAR_BASE_URL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
@@ -40,7 +43,12 @@ async def test_user_flow_success(hass: HomeAssistant, recorder_mock) -> None:
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "secret",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -48,6 +56,8 @@ async def test_user_flow_success(hass: HomeAssistant, recorder_mock) -> None:
     assert result["data"] == {
         CONF_USERNAME: "test@example.com",
         CONF_PASSWORD: "secret",
+        CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+        CONF_SIDECAR_API_TOKEN: "",
     }
 
 
@@ -62,7 +72,12 @@ async def test_user_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> Non
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "wrong"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "wrong",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -80,7 +95,12 @@ async def test_user_flow_cannot_connect(hass: HomeAssistant, recorder_mock) -> N
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "secret",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -91,7 +111,12 @@ async def test_user_flow_duplicate_entry(hass: HomeAssistant, recorder_mock) -> 
     """Test that duplicate accounts are rejected."""
     existing = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     existing.add_to_hass(hass)
@@ -105,7 +130,12 @@ async def test_user_flow_duplicate_entry(hass: HomeAssistant, recorder_mock) -> 
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "secret",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -123,7 +153,12 @@ async def test_user_flow_error_then_success(hass: HomeAssistant, recorder_mock) 
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "wrong"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "wrong",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
         assert result["type"] is FlowResultType.FORM
         assert result["errors"] == {"base": "invalid_auth"}
@@ -137,7 +172,12 @@ async def test_user_flow_error_then_success(hass: HomeAssistant, recorder_mock) 
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "correct"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "correct",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -147,7 +187,12 @@ async def test_reauth_flow_success(hass: HomeAssistant, recorder_mock) -> None:
     """Test a successful reauth flow."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "old_pass"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "old_pass",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     entry.add_to_hass(hass)
@@ -165,7 +210,12 @@ async def test_reauth_flow_success(hass: HomeAssistant, recorder_mock) -> None:
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "new_pass"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "new_pass",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.ABORT
@@ -177,7 +227,12 @@ async def test_reauth_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> N
     """Test reauth flow with wrong password."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "old_pass"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "old_pass",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     entry.add_to_hass(hass)
@@ -190,7 +245,12 @@ async def test_reauth_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> N
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_USERNAME: "test@example.com", CONF_PASSWORD: "still_wrong"},
+            {
+                CONF_USERNAME: "test@example.com",
+                CONF_PASSWORD: "still_wrong",
+                CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+                CONF_SIDECAR_API_TOKEN: "",
+            },
         )
 
     assert result["type"] is FlowResultType.FORM
@@ -201,7 +261,12 @@ async def test_options_flow_shows_default(hass: HomeAssistant, recorder_mock) ->
     """Test that the options flow shows the default update interval."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     entry.add_to_hass(hass)
@@ -225,7 +290,12 @@ async def test_options_flow_saves_custom_interval(
     """Test that the options flow saves a custom polling interval."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     entry.add_to_hass(hass)
@@ -254,7 +324,12 @@ async def test_options_flow_preserves_existing_value(
     """Test that the options flow shows the previously saved value."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         options={CONF_UPDATE_INTERVAL: 8},
         unique_id="test@example.com",
     )

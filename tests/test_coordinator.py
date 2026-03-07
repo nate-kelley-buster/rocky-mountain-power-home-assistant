@@ -10,19 +10,18 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.rocky_mountain_power.const import (
+    CONF_SIDECAR_API_TOKEN,
+    CONF_SIDECAR_BASE_URL,
     CONF_UPDATE_INTERVAL,
+    DEFAULT_SIDECAR_BASE_URL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
 )
 from custom_components.rocky_mountain_power.coordinator import (
     RockyMountainPowerCoordinator,
 )
-from custom_components.rocky_mountain_power.rocky_mountain_power import (
-    AccountInfo,
-    CannotConnect,
-    CostRead,
-    InvalidAuth,
-)
+from custom_components.rocky_mountain_power.exceptions import CannotConnect, InvalidAuth
+from custom_components.rocky_mountain_power.models import AccountInfo, CostRead
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -38,7 +37,12 @@ def mock_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Create and register a mock config entry."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     entry.add_to_hass(hass)
@@ -110,7 +114,6 @@ async def test_update_success_single_account(
     coordinator.api.login.return_value = None
     coordinator.api.get_accounts.return_value = [acct]
     coordinator.api.switch_account.return_value = True
-    coordinator.api.utility.accounts = [{"accountNumber": "1234567890"}]
     coordinator.api.account = {"accountNumber": "1234567890"}
 
     mock_forecast = MagicMock()
@@ -153,7 +156,6 @@ async def test_update_skips_inactive_accounts(
     coordinator.api.login.return_value = None
     coordinator.api.get_accounts.return_value = [active, inactive]
     coordinator.api.switch_account.return_value = True
-    coordinator.api.utility.accounts = [{"accountNumber": "111"}]
     coordinator.api.account = {"accountNumber": "111"}
     coordinator.api.get_forecast.return_value = []
     coordinator.api.get_billing_info.return_value = None
@@ -222,7 +224,12 @@ async def test_coordinator_uses_default_update_interval(
     """Test that the coordinator defaults to 12 hours when no option is set."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         unique_id="test@example.com",
     )
     entry.add_to_hass(hass)
@@ -236,7 +243,12 @@ async def test_coordinator_uses_custom_update_interval(
     """Test that the coordinator reads the update interval from options."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_USERNAME: "test@example.com", CONF_PASSWORD: "secret"},
+        data={
+            CONF_USERNAME: "test@example.com",
+            CONF_PASSWORD: "secret",
+            CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
+            CONF_SIDECAR_API_TOKEN: "",
+        },
         options={CONF_UPDATE_INTERVAL: 6},
         unique_id="test@example.com",
     )
