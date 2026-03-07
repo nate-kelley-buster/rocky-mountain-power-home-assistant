@@ -32,13 +32,11 @@ class RockyMountainPower:
         username: str,
         password: str,
         sidecar_base_url: str | None = None,
-        sidecar_api_token: str | None = None,
     ) -> None:
         """Initialize."""
         self._username: str = username
         self._password: str = password
         self._sidecar_base_url = sidecar_base_url.rstrip("/") if sidecar_base_url else None
-        self._sidecar_api_token = sidecar_api_token
         self._session_id: str | None = None
         self._accounts_cache: list[dict[str, Any]] = []
         self.account: dict = {}
@@ -54,13 +52,10 @@ class RockyMountainPower:
 
     def _sidecar_headers(self) -> dict[str, str]:
         """Build sidecar request headers."""
-        headers = {
+        return {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        if self._sidecar_api_token:
-            headers["X-API-Token"] = self._sidecar_api_token
-        return headers
 
     def _sidecar_request(
         self,

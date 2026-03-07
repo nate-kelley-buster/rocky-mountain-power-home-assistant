@@ -35,25 +35,7 @@ git clone https://github.com/nate-kelley-buster/rocky-mountain-power-home-assist
 cd rocky-mountain-power-home-assistant
 ```
 
-### 2. Create a `.env` file
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set a secure API token:
-
-```env
-RMP_SIDECAR_API_TOKEN=your-random-secret-here
-```
-
-Generate one with:
-
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-### 3. Start the sidecar
+### 2. Start the sidecar
 
 ```bash
 docker compose up -d --build
@@ -72,7 +54,7 @@ Expected response:
 {"status":"ok"}
 ```
 
-### 4. Install the Home Assistant integration
+### 3. Install the Home Assistant integration
 
 **Option A -- HACS (recommended)**
 
@@ -94,7 +76,7 @@ Copy `custom_components/rocky_mountain_power/` into your Home Assistant config d
 
 Restart Home Assistant.
 
-### 5. Configure the integration
+### 4. Configure the integration
 
 1. Go to **Settings -> Devices & Services -> Add Integration**.
 2. Search for **Rocky Mountain Power**.
@@ -102,7 +84,6 @@ Restart Home Assistant.
    - Rocky Mountain Power username
    - Rocky Mountain Power password
    - Sidecar base URL (see [Networking](#networking) below)
-   - Sidecar API token (the value from your `.env`)
 
 ## Networking
 
@@ -150,8 +131,6 @@ Available intervals: 1h, 2h, 4h, 6h, 8h, 12h, 24h.
 
 - Verify the URL you entered in the integration config.
 - From inside the HA container, test connectivity: `curl http://<sidecar-url>/health`.
-- Ensure the API token matches exactly.
-
 **Login fails (invalid_auth)**
 
 - Confirm MFA / 2FA is disabled on your Rocky Mountain Power account.

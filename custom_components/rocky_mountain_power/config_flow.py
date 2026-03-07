@@ -16,7 +16,6 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
 
 from .const import (
-    CONF_SIDECAR_API_TOKEN,
     CONF_SIDECAR_BASE_URL,
     CONF_UPDATE_INTERVAL,
     DEFAULT_SIDECAR_BASE_URL,
@@ -35,7 +34,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(
             CONF_SIDECAR_BASE_URL, default=DEFAULT_SIDECAR_BASE_URL
         ): str,
-        vol.Optional(CONF_SIDECAR_API_TOKEN, default=""): str,
     }
 )
 
@@ -46,7 +44,6 @@ def _validate_login(login_data: dict[str, str]) -> dict[str, str]:
         login_data[CONF_USERNAME],
         login_data[CONF_PASSWORD],
         login_data[CONF_SIDECAR_BASE_URL],
-        login_data.get(CONF_SIDECAR_API_TOKEN) or None,
     )
     errors: dict[str, str] = {}
     try:
@@ -114,12 +111,6 @@ class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_SIDECAR_BASE_URL, DEFAULT_SIDECAR_BASE_URL
                         ),
                     ): str,
-                    vol.Optional(
-                        CONF_SIDECAR_API_TOKEN,
-                        default=self._get_reauth_entry().data.get(
-                            CONF_SIDECAR_API_TOKEN, ""
-                        ),
-                    ): str,
                 }
             ),
         )
@@ -148,10 +139,6 @@ class RockyMountainPowerConfigFlow(ConfigFlow, domain=DOMAIN):
                         default=reauth_entry.data.get(
                             CONF_SIDECAR_BASE_URL, DEFAULT_SIDECAR_BASE_URL
                         ),
-                    ): str,
-                    vol.Optional(
-                        CONF_SIDECAR_API_TOKEN,
-                        default=reauth_entry.data.get(CONF_SIDECAR_API_TOKEN, ""),
                     ): str,
                 }
             ),

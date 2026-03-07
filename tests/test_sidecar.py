@@ -21,7 +21,6 @@ def test_sidecar_client_login_stores_session_metadata() -> None:
         "user@example.com",
         "secret",
         DEFAULT_SIDECAR_BASE_URL,
-        "token-123",
     )
 
     with patch.object(

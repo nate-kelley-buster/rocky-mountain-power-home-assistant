@@ -23,7 +23,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util.unit_conversion import EnergyConverter
 
 from .const import (
-    CONF_SIDECAR_API_TOKEN,
     CONF_SIDECAR_BASE_URL,
     CONF_UPDATE_INTERVAL,
     DEFAULT_SIDECAR_BASE_URL,
@@ -65,7 +64,6 @@ class RockyMountainPowerCoordinator(DataUpdateCoordinator[dict[str, dict]]):
             config_entry.data[CONF_USERNAME],
             config_entry.data[CONF_PASSWORD],
             config_entry.data.get(CONF_SIDECAR_BASE_URL, DEFAULT_SIDECAR_BASE_URL),
-            config_entry.data.get(CONF_SIDECAR_API_TOKEN) or None,
         )
 
         # Force periodic updates even when no sensors are registered (e.g.,

@@ -9,7 +9,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.rocky_mountain_power.const import (
-    CONF_SIDECAR_API_TOKEN,
     CONF_SIDECAR_BASE_URL,
     DEFAULT_SIDECAR_BASE_URL,
     DOMAIN,
@@ -54,7 +53,6 @@ def mock_config_entry() -> MockConfigEntry:
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )

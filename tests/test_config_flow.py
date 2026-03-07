@@ -9,7 +9,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.rocky_mountain_power.const import (
-    CONF_SIDECAR_API_TOKEN,
     CONF_SIDECAR_BASE_URL,
     CONF_UPDATE_INTERVAL,
     DEFAULT_SIDECAR_BASE_URL,
@@ -47,7 +46,6 @@ async def test_user_flow_success(hass: HomeAssistant, recorder_mock) -> None:
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "secret",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -57,7 +55,6 @@ async def test_user_flow_success(hass: HomeAssistant, recorder_mock) -> None:
         CONF_USERNAME: "test@example.com",
         CONF_PASSWORD: "secret",
         CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-        CONF_SIDECAR_API_TOKEN: "",
     }
 
 
@@ -76,7 +73,6 @@ async def test_user_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> Non
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "wrong",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -99,7 +95,6 @@ async def test_user_flow_cannot_connect(hass: HomeAssistant, recorder_mock) -> N
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "secret",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -115,7 +110,6 @@ async def test_user_flow_duplicate_entry(hass: HomeAssistant, recorder_mock) -> 
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -134,7 +128,6 @@ async def test_user_flow_duplicate_entry(hass: HomeAssistant, recorder_mock) -> 
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "secret",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -157,7 +150,6 @@ async def test_user_flow_error_then_success(hass: HomeAssistant, recorder_mock) 
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "wrong",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
         assert result["type"] is FlowResultType.FORM
@@ -176,7 +168,6 @@ async def test_user_flow_error_then_success(hass: HomeAssistant, recorder_mock) 
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "correct",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -191,7 +182,6 @@ async def test_reauth_flow_success(hass: HomeAssistant, recorder_mock) -> None:
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "old_pass",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -214,7 +204,6 @@ async def test_reauth_flow_success(hass: HomeAssistant, recorder_mock) -> None:
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "new_pass",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -231,7 +220,6 @@ async def test_reauth_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> N
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "old_pass",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -249,7 +237,6 @@ async def test_reauth_flow_invalid_auth(hass: HomeAssistant, recorder_mock) -> N
                 CONF_USERNAME: "test@example.com",
                 CONF_PASSWORD: "still_wrong",
                 CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-                CONF_SIDECAR_API_TOKEN: "",
             },
         )
 
@@ -265,7 +252,6 @@ async def test_options_flow_shows_default(hass: HomeAssistant, recorder_mock) ->
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -294,7 +280,6 @@ async def test_options_flow_saves_custom_interval(
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -328,7 +313,6 @@ async def test_options_flow_preserves_existing_value(
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         options={CONF_UPDATE_INTERVAL: 8},
         unique_id="test@example.com",

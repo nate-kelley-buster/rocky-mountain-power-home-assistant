@@ -10,7 +10,6 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.rocky_mountain_power.const import (
-    CONF_SIDECAR_API_TOKEN,
     CONF_SIDECAR_BASE_URL,
     CONF_UPDATE_INTERVAL,
     DEFAULT_SIDECAR_BASE_URL,
@@ -41,7 +40,6 @@ def mock_config_entry(hass: HomeAssistant) -> MockConfigEntry:
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -228,7 +226,6 @@ async def test_coordinator_uses_default_update_interval(
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         unique_id="test@example.com",
     )
@@ -247,7 +244,6 @@ async def test_coordinator_uses_custom_update_interval(
             CONF_USERNAME: "test@example.com",
             CONF_PASSWORD: "secret",
             CONF_SIDECAR_BASE_URL: DEFAULT_SIDECAR_BASE_URL,
-            CONF_SIDECAR_API_TOKEN: "",
         },
         options={CONF_UPDATE_INTERVAL: 6},
         unique_id="test@example.com",

@@ -5,11 +5,10 @@ from __future__ import annotations
 import dataclasses
 from datetime import date, datetime
 from enum import Enum
-import os
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 
 from custom_components.rocky_mountain_power.client import RockyMountainPower
 from custom_components.rocky_mountain_power.exceptions import CannotConnect, InvalidAuth
@@ -18,7 +17,6 @@ from custom_components.rocky_mountain_power.models import AggregateType
 app = FastAPI(title="Rocky Mountain Power Sidecar")
 
 _SESSIONS: dict[str, RockyMountainPower] = {}
-_API_TOKEN = os.getenv("RMP_SIDECAR_API_TOKEN")
 
 
 def _serialize(value: Any) -> Any:
@@ -36,12 +34,6 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     return value
-
-
-def _authorize(x_api_token: str | None) -> None:
-    """Validate the optional sidecar API token."""
-    if _API_TOKEN and x_api_token != _API_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid sidecar API token")
 
 
 def _get_session(session_id: str) -> RockyMountainPower:
@@ -86,10 +78,8 @@ def health() -> dict[str, str]:
 @app.post("/session/login")
 def login(
     payload: dict[str, Any],
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Create a new scraping session."""
-    _authorize(x_api_token)
     api = RockyMountainPower(payload["username"], payload["password"])
     try:
         api.login()
@@ -111,10 +101,8 @@ def login(
 @app.delete("/session/{session_id}")
 def end_session(
     session_id: str,
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, bool]:
     """Close a scraping session."""
-    _authorize(x_api_token)
     api = _SESSIONS.pop(session_id, None)
     if api is not None:
         api.end_session()
@@ -124,10 +112,8 @@ def end_session(
 @app.get("/session/{session_id}/accounts")
 def get_accounts(
     session_id: str,
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Return all discovered accounts for the session."""
-    _authorize(x_api_token)
     api = _get_session(session_id)
     try:
         accounts = api.get_accounts()
@@ -143,10 +129,8 @@ def get_accounts(
 def select_account(
     session_id: str,
     payload: dict[str, Any],
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Select the current account for subsequent requests."""
-    _authorize(x_api_token)
     api = _get_session(session_id)
     account_number = payload.get("account_number")
     if not account_number:
@@ -165,10 +149,8 @@ def select_account(
 def get_forecast(
     session_id: str,
     account_number: str | None = None,
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Return forecast data for an account."""
-    _authorize(x_api_token)
     api = _get_session(session_id)
     try:
         _ensure_account_selected(api, account_number)
@@ -183,10 +165,8 @@ def get_forecast(
 def get_billing(
     session_id: str,
     account_number: str | None = None,
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Return billing data for an account."""
-    _authorize(x_api_token)
     api = _get_session(session_id)
     try:
         _ensure_account_selected(api, account_number)
@@ -203,10 +183,8 @@ def get_cost_reads(
     aggregate: str,
     account_number: str | None = None,
     period: int = 1,
-    x_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     """Return cost reads for an account."""
-    _authorize(x_api_token)
     api = _get_session(session_id)
     try:
         _ensure_account_selected(api, account_number)
